@@ -23,6 +23,10 @@ USERS_SHEET_NAME = "Пользователи"
 GAMMA_CLUSTER_SHEET = "Гамма кластер"
 LOGS_SHEET = "Логи"
 
+# Конфигурация для веб-хуков
+WEBHOOK_HOST = os.getenv('WEBHOOK_HOST')  # Например: https://your-bot.render.com
+WEBHOOK_PATH = "/webhook"  # Путь для веб-хука
+WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 # ===================== ИНИЦИАЛИЗАЦИЯ =====================
 credentials = Credentials.from_service_account_info(
     GOOGLE_CREDS,
@@ -38,15 +42,11 @@ dp = Dispatcher()
 
 # Инициализация таблиц
 try:
-    # Основной файл (ShopBotData)
     main_spreadsheet = client.open(SPREADSHEET_NAME)
     users_sheet = main_spreadsheet.worksheet(USERS_SHEET_NAME)
     logs_sheet = main_spreadsheet.worksheet(LOGS_SHEET)
-    
-    # Файл заказов (OrderSystem)
     orders_spreadsheet = client.open(ORDERS_SPREADSHEET_NAME)
     gamma_cluster_sheet = orders_spreadsheet.worksheet(GAMMA_CLUSTER_SHEET)
-
 except Exception as e:
     print(f"Ошибка инициализации: {str(e)}")
     exit()
@@ -374,20 +374,24 @@ async def handle_stock_check(message: types.Message):
     await message.answer("🛠️ Функция в разработке")
 
 # ===================== ОБРАБОТЧИК ВЕБХУКОВ =====================
-async def on_startup(dp):
-    await bot.set_webhook(WEBHOOK_URL)
+async def on_startup(app):
+    await bot.set_webhook(url=WEBHOOK_URL)
+    print(f"Webhook URL: {WEBHOOK_URL}")
 
-async def on_shutdown(dp):
-    logging.warning('Shutting down..')
+async def on_shutdown(app):
     await bot.delete_webhook()
-    await dp.storage.close()
-    await dp.storage.wait_closed()
-    logging.warning('Bye!')
+    await bot.session.close()
 
 async def handle_webhook(request):
-    update = Update(**(await request.json()))
-    await dp.process_update(update)
-    return web.Response(text="ok", status=200)
+    update = types.Update(**await request.json())
+    await dp.feed_update(bot=bot, update=update)
+    return web.Response(text="Ok", status=200)
+
+# Настройка aiohttp приложения
+app = web.Application()
+app.router.add_post(WEBHOOK_PATH, handle_webhook)
+app.on_startup.append(on_startup)
+app.on_shutdown.append(on_shutdown)
 
 @dp.message(lambda message: 'order_update' in message.text)
 async def send_order_notification(message: types.Message):
@@ -404,12 +408,8 @@ app = web.Application()
 app.router.add_post(WEBHOOK_PATH, handle_webhook)
 # ===================== ЗАПУСК =====================
 if __name__ == "__main__":
-    executor.start_webhook(
-        dispatcher=dp,
-        webhook_path=WEBHOOK_PATH,
-        on_startup=on_startup,
-        on_shutdown=on_shutdown,
-        skip_updates=True,
-        host='0.0.0.0',
-        port=8443,
+    web.run_app(
+        app,
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", 8080))  # Render использует переменную окружения PORT
     )
