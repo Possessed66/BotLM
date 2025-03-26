@@ -387,7 +387,6 @@ async def handle_webhook(request):
     await dp.feed_update(bot=bot, update=update)
     return web.Response(text="Ok", status=200)
 
-# Настройка aiohttp приложения
 app = web.Application()
 app.router.add_post(WEBHOOK_PATH, handle_webhook)
 app.on_startup.append(on_startup)
