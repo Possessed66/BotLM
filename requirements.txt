@@ -1,5 +1,5 @@
 aiogram==3.4.0
-gspread==5.9.8
+gspread==5.9.0
 google-auth==2.22.3
 aiohttp==3.9.1
 python-dotenv==1.0.0
