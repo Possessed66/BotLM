@@ -319,43 +319,28 @@ async def final_confirmation(message: types.Message, state: FSMContext):
     try:
         department_sheet = orders_spreadsheet.worksheet(data['department'])
         next_row = len(department_sheet.col_values(1)) + 1
-        
-        department_sheet.update(
-            range_name=f"A{next_row}",
-            values=[[data['shop']]]
-        )
 
-        department_sheet.update(
-            range_name=f"B{next_row}",
-            values=[[data['article']]]
-        )
+        # СОЗДАЁМ СПИСОК ОБНОВЛЕНИЙ
+        updates = [
+            {'range': f'A{next_row}', 'values': [[data['shop']]]},          # Магазин
+            {'range': f'B{next_row}', 'values': [[data['article']]]},       # Артикул
+            {'range': f'C{next_row}', 'values': [[data['order_reason']]]},  # Причина/Номер
+            {'range': f'D{next_row}', 'values': [[datetime.now().strftime("%d.%m.%Y %H:%M")]]},  # Дата заказа
+            {'range': f'E{next_row}', 'values': [[f"{data['user_name']}, {data['user_position']}"]]},  # Имя/Должность
+            {'range': f'K{next_row}', 'values': [[str(data['quantity'])]]},  # Количество
+            {'range': f'R{next_row}', 'values': [[str(message.from_user.id)]]},  # Chat ID
+        ]
 
-        department_sheet.update(
-            range_name=f"C{next_row}",
-            values=[[data['order_reason']]]
-        )
+        # ПРОВЕРКА НАЛИЧИЯ ВСЕХ ОБЯЗАТЕЛЬНЫХ ПОЛЯХ
+        required_fields = ['shop', 'article', 'order_reason', 'quantity']
+        for field in required_fields:
+            if not data.get(field):
+                raise ValueError(f"Отсутствует обязательное поле: {field}")
 
-        department_sheet.update(
-            range_name=f"D{next_row}",
-            values=[[datetime.now().strftime("%d.%m.%Y %H:%M")]]
-        )
-
-        department_sheet.update(
-            range_name=f"E{next_row}",
-            values=[[f"{data['user_name']}, {data['user_position']}"]]
-        )
-
-        department_sheet.update(
-            range_name=f"K{next_row}",
-            values=[[data['quantity']]]
-        )
-        department_sheet.update(
-            range_name=f"R{next_row}",
-            values=[[str(message.from_user.id)]]
-        )
+        # ПРОМЕЩАЕМ ВСЕ ОБНОВЛЕНИЯ В ОДИН ЗАПРОС
+        department_sheet.batch_update(updates)
         await message.answer("✅ Заказ успешно сохранен!", reply_markup=main_menu_keyboard())
         await state.clear()
-        
     except Exception as e:
         await log_error(message.from_user.id, f"Save Error: {str(e)}")
         await message.answer("⚠️ Ошибка сохранения заказа")
@@ -376,7 +361,7 @@ async def handle_stock_check(message: types.Message):
 # ===================== ОБРАБОТЧИК ВЕБХУКОВ =====================
 async def on_startup(app):
     await bot.set_webhook(url=WEBHOOK_URL)
-    print(f"Webhook URL: {WEBHOOK_URL}")
+    logging.info(f"Webhook URL: {WEBHOOK_URL}")
 
 async def on_shutdown(app):
     await bot.delete_webhook()
@@ -387,6 +372,7 @@ async def handle_webhook(request):
     await dp.feed_update(bot=bot, update=update)
     return web.Response(text="Ok", status=200)
 
+# ИНИЦИАЛИЗАЦИЯ АППЛИКАЦИИ ОДИН РАЗ
 app = web.Application()
 app.router.add_post(WEBHOOK_PATH, handle_webhook)
 app.on_startup.append(on_startup)
@@ -394,21 +380,17 @@ app.on_shutdown.append(on_shutdown)
 
 @dp.message(lambda message: 'order_update' in message.text)
 async def send_order_notification(message: types.Message):
-    # Извлекаем данные из сообщения
-    data = message.text.split('\n')
-    chat_id = data[1]
-    order_info = '\n'.join(data[2:])
+    try:
+        data = message.text.split('\n')
+        chat_id = data[1]
+        order_info = '\n'.join(data[2:])
+        await bot.send_message(chat_id=chat_id, text=order_info, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logging.error(f"Ошибка отправки уведомления: {str(e)}")
 
-    # Отправляем уведомление пользователю
-    await bot.send_message(chat_id=chat_id, text=order_info, parse_mode=ParseMode.HTML)
-
-# Запуск веб-сервера
-app = web.Application()
-app.router.add_post(WEBHOOK_PATH, handle_webhook)
-# ===================== ЗАПУСК =====================
+# ЗАПУСК СЕРВЕРА
 if __name__ == "__main__":
     web.run_app(
         app,
         host="0.0.0.0",
-        port=int(os.getenv("PORT", 8080))  # Render использует переменную окружения PORT
-    )
+        port=int(os.getenv("PORT", 8080))
