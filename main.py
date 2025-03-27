@@ -14,8 +14,18 @@ from aiohttp import web
 import logging
 
 # ===================== КОНФИГУРАЦИЯ =====================
-BOT_TOKEN = os.environ['BOT_TOKEN']
-GOOGLE_CREDS = json.loads(os.environ['GOOGLE_CREDENTIALS'])
+from dotenv import load_dotenv
+load_dotenv()  # Загружаем переменные из .env
+
+# Проверка наличия обязательных переменных
+try:
+    BOT_TOKEN = os.environ['BOT_TOKEN']
+    GOOGLE_CREDS_JSON = os.environ['GOOGLE_CREDENTIALS']
+except KeyError as e:
+    raise RuntimeError(f"Отсутствует обязательная переменная окружения: {e}")
+
+# Преобразуем GOOGLE_CREDENTIALS из строки в объект
+GOOGLE_CREDS = json.loads(GOOGLE_CREDS_JSON)
 
 SPREADSHEET_NAME = "ShopBotData"
 ORDERS_SPREADSHEET_NAME = "Копия Заказы МЗ 0.2"
