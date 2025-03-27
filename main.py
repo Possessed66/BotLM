@@ -399,5 +399,11 @@ async def send_order_notification(message: types.Message):
         logging.error(f"Ошибка отправки уведомления: {str(e)}")
 
 if __name__ == "__main__":
-    # Запуск бота в режиме polling
-    executor.start_polling(dp, skip_updates=True)
+    # executor.start_polling(dp, skip_updates=True)  # Удалите эту строку
+
+    # На это:
+    async def main():
+        await dp.start_polling(bot, skip_updates=True)
+
+    import asyncio
+    asyncio.run(main())
