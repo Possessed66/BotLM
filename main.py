@@ -1,7 +1,7 @@
 import os
 import json
 from datetime import datetime, timedelta
-from aiogram import Bot, Dispatcher, types, F, executor
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
