@@ -1,7 +1,7 @@
 import os
 import json
 from datetime import datetime, timedelta
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Bot, Dispatcher, types, F, executor
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -398,9 +398,6 @@ async def send_order_notification(message: types.Message):
     except Exception as e:
         logging.error(f"Ошибка отправки уведомления: {str(e)}")
 
-# ЗАПУСК СЕРВЕРА
 if __name__ == "__main__":
-    web.run_app(
-        app,
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", 8080)))
+    # Запуск бота в режиме polling
+    executor.start_polling(dp, skip_updates=True)
