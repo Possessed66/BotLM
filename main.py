@@ -15,7 +15,7 @@ import logging
 
 # ===================== КОНФИГУРАЦИЯ =====================
 from dotenv import load_dotenv
-load_dotenv()  # Загружаем переменные из .env
+load_dotenv('secret.env')  # Загружаем переменные из .env
 
 # Проверка наличия обязательных переменных
 try:
