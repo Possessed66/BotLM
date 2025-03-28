@@ -132,6 +132,10 @@ def confirm_keyboard():
     return builder.as_markup(resize_keyboard=True)
 
 # =============== ОПТИМИЗИРОВАННЫЕ ФУНКЦИИ ===============
+def get_supplier_dates_sheet(shop_number: str):
+    """Возвращает лист с датами поставок для указанного магазина"""
+    return orders_spreadsheet.worksheet(f"Даты выходов заказов {shop_number}")
+    
 async def get_supplier_data(shop_number: str, supplier_id: str):
     """Асинхронный поиск данных поставщика с кэшированием"""
     supplier_sheet = get_supplier_dates_sheet(shop_number)
