@@ -55,7 +55,6 @@ async def preload_sheets():
             get_supplier_dates_sheet(shop),
             force_update=True
         )
-        )
 
 # =============== ОБНОВЛЕННЫЕ КОНФИГУРАЦИИ ===============
 from dotenv import load_dotenv
