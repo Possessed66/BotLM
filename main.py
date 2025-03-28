@@ -433,20 +433,13 @@ async def process_order_reason(message: types.Message, state: FSMContext):
     await state.update_data(order_reason=order_reason)
     # Вывод информации для подтверждения
     await message.answer(
-        f"📦 Артикул: {data['article']}
-"
-        f"🏷️ Название: {data['product_name']}
-"
-        f"📅 Дата заказа: {data['order_date']}
-"
-        f"🚚 Дата поставки: {data['delivery_date']}
-"
-        f"🏭 Название поставщика: {data['supplier_name']}
-"
-        f"Количество: {data['quantity']}
-"
-        f"Номер заказа/Причина: {order_reason}
-",
+        f"📦 Артикул: {data['article']}\n"
+        f"🏷️ Название: {data['product_name']}\n"
+        f"📅 Дата заказа: {data['order_date']}\n"
+        f"🚚 Дата поставки: {data['delivery_date']}\n"
+        f"🏭 Название поставщика: {data['supplier_name']}\n"
+        f"Количество: {data['quantity']}\n"
+        f"Номер заказа/Причина: {order_reason}",
         reply_markup=confirm_keyboard()
     )
     await state.set_state(OrderStates.confirmation)
