@@ -161,7 +161,7 @@ def parse_supplier_data(record):
     return {
         'supplier_id': record.get('Номер осн. пост.', ''),
         'order_days': order_days,
-        'delivery_days': int(record.get('Срок доставки в магазин', 0))  # Количество дней на доставку
+        'delivery_days': int(record.get('Срок доставки в магазин', 0)),  # Количество дней на доставку
         'supplier_name': record.get('Название осн. пост.', '')
     }
 
