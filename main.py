@@ -328,9 +328,93 @@ async def correct_quantity(message: types.Message, state: FSMContext):
     await message.answer("🔢 Введите новое количество:", reply_markup=types.ReplyKeyboardRemove())
     await state.set_state(OrderStates.quantity_input)
 
+
+@dp.message(OrderStates.confirmation, F.text == "❌ Отмена")
+async def cancel_order(message: types.Message, state: FSMContext):
+    await message.answer("Отмена заказа. Возврат в главное меню.", reply_markup=main_menu_keyboard())
+    await state.clear()
+
+
 @dp.message(F.text == "📋 Запрос информации")
-async def handle_info_request(message: types.Message):
-    await message.answer("🛠️ Функция в разработке")
+async def handle_info_request(message: types.Message, state: FSMContext):
+    user_data = await get_user_data(str(message.from_user.id))
+    if not user_data:
+        await message.answer("❌ Сначала пройдите регистрацию через /start")
+        return
+    await state.update_data(
+        shop=user_data['shop'],
+        user_name=user_data['name'],
+        user_position=user_data['position']
+    )
+    await message.answer("🔢 Введите артикул товара:", reply_markup=types.ReplyKeyboardRemove())
+    await state.set_state(OrderStates.article_input_info)
+
+@dp.message(OrderStates.article_input_info)
+async def process_article_info(message: types.Message, state: FSMContext):
+    article = message.text.strip()
+    data = await state.get_data()
+    try:
+        # Поиск строки по артикулу и магазину
+        unique_key = f"{article}{data['shop']}"
+        cell = gamma_cluster_sheet.find(unique_key)
+        if not cell:
+            await message.answer("❌ Товар не найден.")
+            return
+        # Получаем строку с данными товара
+        product_row = gamma_cluster_sheet.row_values(cell.row)
+        product_data = dict(zip(gamma_cluster_sheet.row_values(1), product_row))
+        # Извлекаем данные поставщика
+        supplier_id = str(product_data["Номер осн. пост."]).strip()
+        supplier_sheet = get_supplier_dates_sheet(data['shop'])
+        # Поиск строки по supplier_id
+        supplier_cell = supplier_sheet.find(supplier_id)
+        if not supplier_cell:
+            raise ValueError("Поставщик не найден")
+        # Получаем строку с данными поставщика
+        supplier_row = supplier_sheet.row_values(supplier_cell.row)
+        supplier_data = parse_supplier_data(dict(zip(supplier_sheet.row_values(1), supplier_row)))
+        # Рассчитываем даты
+        order_date, delivery_date = calculate_delivery_date(supplier_data)
+        await state.update_data(
+            article=article,
+            product_name=product_data['Название'],
+            department=product_data['Отдел'],
+            order_date=order_date,
+            delivery_date=delivery_date,
+            supplier_id=supplier_id
+        )
+        await message.answer(
+            f"Магазин: {data['shop']}
+"
+            f"📦 Артикул: {article}
+"
+            f"🏷️ Название: {product_data['Название']}
+"
+            f"📅 Дата заказа: {order_date}
+"
+            f"🚚 Дата поставки: {delivery_date}
+"
+        )
+        await message.answer("Выберите действие:", reply_markup=make_order_keyboard())
+    except Exception as e:
+        await log_error(message.from_user.id, f"Article {article}: {str(e)}")
+        await message.answer(f"⚠️ Ошибка: {str(e)}")
+
+@dp.message(F.text == "Сделать заказ")
+async def make_order(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    article = data.get('article')
+    if not article:
+        await message.answer("Артикул не найден. Попробуйте снова.")
+        return
+    await state.update_data(quantity=None)
+    await message.answer("🔢 Введите количество товара:")
+    await state.set_state(OrderStates.quantity_input)
+
+@dp.message(F.text == "🏠 Главное меню")
+async def go_to_main_menu(message: types.Message, state: FSMContext):
+    await message.answer("Возврат в главное меню.", reply_markup=main_menu_keyboard())
+    await state.clear()
 
 @dp.message(F.text == "📦 Проверка стока")
 async def handle_stock_check(message: types.Message):
