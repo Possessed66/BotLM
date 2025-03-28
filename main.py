@@ -134,19 +134,14 @@ def confirm_keyboard():
 # =============== ОПТИМИЗИРОВАННЫЕ ФУНКЦИИ ===============
 async def get_user_data(user_id: str):
     try:
-        # Используем кэш для пользовательских данных
-        cached_users = await get_sheet_data(users_sheet)
-        for row in cached_users:
-            if row[0] == user_id:
-                return {
-                    'shop': row[4],
-                    'name': row[1],
-                    'surname': row[2],
-                    'position': row[3]
-                }
-        return None
-    except Exception as e:
-        await log_error(user_id, f"Ошибка получения данных пользователя: {str(e)}")
+        cell = users_sheet.find(user_id)
+        return {
+            'shop': users_sheet.cell(cell.row, 5).value,
+            'name': users_sheet.cell(cell.row, 2).value,
+            'surname': users_sheet.cell(cell.row, 3).value,
+            'position': users_sheet.cell(cell.row, 4).value
+        }
+    except:
         return None
 
 async def log_error(user_id: str, error: str):
