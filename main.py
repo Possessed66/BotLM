@@ -409,8 +409,8 @@ async def process_article_info(message: types.Message, state: FSMContext):
         await log_error(message.from_user.id, f"Article {article}: {str(e)}")
         await message.answer(f"⚠️ Ошибка: {str(e)}")
 
-@dp.message(F.text == "Сделать заказ")
-async def make_order(message: types.Message, state: FSMContext):
+@dp.message(F.text == "Сделать заказ", OrderStates.article_input_info)
+async def make_order_from_info(message: types.Message, state: FSMContext):
     data = await state.get_data()
     article = data.get('article')
     if not article:
@@ -420,10 +420,36 @@ async def make_order(message: types.Message, state: FSMContext):
     await message.answer("🔢 Введите количество товара:")
     await state.set_state(OrderStates.quantity_input)
 
-@dp.message(F.text == "🏠 Главное меню")
-async def go_to_main_menu(message: types.Message, state: FSMContext):
+@dp.message(F.text == "🏠 Главное меню", OrderStates.article_input_info)
+async def go_to_main_menu_from_info(message: types.Message, state: FSMContext):
     await message.answer("Возврат в главное меню.", reply_markup=main_menu_keyboard())
     await state.clear()
+
+@dp.message(OrderStates.order_reason_input)
+async def process_order_reason(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    order_reason = message.text.strip()
+    # Обновляем состояние
+    await state.update_data(order_reason=order_reason)
+    # Вывод информации для подтверждения
+    await message.answer(
+        f"📦 Артикул: {data['article']}
+"
+        f"🏷️ Название: {data['product_name']}
+"
+        f"📅 Дата заказа: {data['order_date']}
+"
+        f"🚚 Дата поставки: {data['delivery_date']}
+"
+        f"🏭 Название поставщика: {data['supplier_name']}
+"
+        f"Количество: {data['quantity']}
+"
+        f"Номер заказа/Причина: {order_reason}
+",
+        reply_markup=confirm_keyboard()
+    )
+    await state.set_state(OrderStates.confirmation)
 
 @dp.message(F.text == "📦 Проверка стока")
 async def handle_stock_check(message: types.Message):
