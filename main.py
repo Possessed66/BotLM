@@ -132,6 +132,15 @@ def confirm_keyboard():
     return builder.as_markup(resize_keyboard=True)
 
 # =============== ОПТИМИЗИРОВАННЫЕ ФУНКЦИИ ===============
+async def get_supplier_data(shop_number: str, supplier_id: str):
+    """Асинхронный поиск данных поставщика с кэшированием"""
+    supplier_sheet = get_supplier_dates_sheet(shop_number)
+    cached_data = await get_sheet_data(supplier_sheet)
+    
+    for row in cached_data:
+        if row[0] == supplier_id:
+            return row
+    return None
 async def get_user_data(user_id: str):
     try:
         cell = users_sheet.find(user_id)
@@ -153,15 +162,7 @@ async def log_error(user_id: str, error: str):
         error
     ])
 
-async def get_supplier_data(shop_number: str, supplier_id: str):
-    """Асинхронный поиск данных поставщика с кэшированием"""
-    supplier_sheet = get_supplier_dates_sheet(shop_number)
-    cached_data = await get_sheet_data(supplier_sheet)
-    
-    for row in cached_data:
-        if row[0] == supplier_id:
-            return row
-    return None
+
 
 # =============== ОБРАБОТЧИКИ КОМАНД ===============
 @dp.message(F.text == "/start")
