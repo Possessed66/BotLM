@@ -69,6 +69,7 @@ class OrderStates(StatesGroup):
     quantity_input = State()
     confirmation = State()
     order_reason_input = State()
+    article_input_info = State()
 
 # ===================== КЛАВИАТУРЫ =====================
 def main_menu_keyboard():
