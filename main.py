@@ -397,11 +397,11 @@ async def process_article_info(message: types.Message, state: FSMContext):
             supplier_id=supplier_id
         )
         await message.answer(
-            f"Магазин: {data['shop']}"
-            f"📦 Артикул: {article}"
-            f"🏷️ Название: {product_data['Название']}"
-            f"📅 Дата заказа: {order_date}"
-            f"🚚 Дата поставки: {delivery_date}"
+            f"Магазин: {data['shop']}\n"
+            f"📦 Артикул: {article}\n"
+            f"🏷️ Название: {product_data['Название']}\n"
+            f"📅 Дата заказа: {order_date}\n"
+            f"🚚 Дата поставки: {delivery_date}\n"
             f"🏭 Название поставщика: {supplier_data['supplier_name']}"
         )
         await message.answer("Выберите действие:", reply_markup=make_order_keyboard())
