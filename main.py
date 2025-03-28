@@ -248,22 +248,24 @@ async def process_article(message: types.Message, state: FSMContext):
     
     # Получаем кэшированные данные гамма-кластера
     gamma_data = await get_sheet_data(gamma_cluster_sheet)
-    
-    unique_key = f"{article}{data['shop']}"
-    for row in gamma_data:
-        if row[0] == unique_key:
-            product_data = dict(zip(gamma_data[0], row))  # Используем заголовки из первой строки
-            break
-    else:
-        await message.answer("❌ Товар не найден.")
-        return
-    
     try:
-        supplier_id = product_data["Номер осн. пост."]
-        supplier_data_row = await get_supplier_data(data['shop'], supplier_id)
+        unique_key = f"{article}{data['shop']}"
+        cell = gamma_cluster_sheet.find(unique_key)
+        if not cell:
+                await message.answer("❌ Товар не найден.")
+                return
         
-        if not supplier_data_row:
-            raise ValueError("Поставщик не найден")
+        # Получаем строку с данными товара
+        product_row = gamma_cluster_sheet.row_values(cell.row)
+        
+        # Используем заголовки из первой строки таблицы
+        headers = gamma_cluster_sheet.row_values(1)
+        product_data = dict(zip(headers, product_row))
+        
+        # Извлекаем данные поставщика
+        supplier_id = str(product_data.get("Номер осн. пост.", "")).strip()
+        if not supplier_id:
+                raise ValueError("У товара не указан номер поставщика")
         
         supplier_data = parse_supplier_data(dict(zip(supplier_data_row[0], supplier_data_row)))
         
@@ -288,22 +290,41 @@ async def process_article(message: types.Message, state: FSMContext):
         await message.answer("🔢 Введите количество товара:", reply_markup=types.ReplyKeyboardRemove())
         await state.set_state(OrderStates.quantity_input)
     except Exception as e:
-        await log_error(str(message.from_user.id), f"Ошибка обработки товара: {str(e)}")
+        await log_error(message.from_user.id, f"Ошибка обработки товара: {str(e)}")
         await message.answer(f"⚠️ Ошибка: {str(e)}")
 
 def parse_supplier_data(record):
+    """
+    Извлекает данные из записи поставщика по новому формату таблицы:
+    Номер осн. пост. | Название осн. пост. | Срок доставки в магазин | ... | День выхода заказа | День выхода заказа 2 | День выхода заказа 3
+    """
     order_days = []
+    # Извлекаем дни выхода заказа из новых позиций столбцов (после пустого столбца)
     order_day_1 = record.get('День выхода заказа', '')
     order_day_2 = record.get('День выхода заказа 2', '')
     order_day_3 = record.get('День выхода заказа 3', '')
     
-    for day in (order_day_1, order_day_2, order_day_3):
-        if day:
-            order_days.append(int(day))
+    # Добавляем дни в список, если они не пустые
+    for day_str in (order_day_1, order_day_2, order_day_3):
+        if day_str:
+            try:
+                day = int(day_str)
+                if 1 <= day <= 7:  # Проверяем, что день в пределах недели
+                    order_days.append(day)
+            except ValueError:
+                logging.error(f"Ошибка: '{day_str}' не число в колонке дня заказа")
+    
+    # Извлекаем срок доставки (столбец 'Срок доставки в магазин')
+    try:
+        delivery_days = int(record.get('Срок доставки в магазин', 0))
+    except ValueError:
+        logging.error(f"Ошибка: '{record.get('Срок доставки в магазин', 0)}' не число")
+        delivery_days = 0  # Значение по умолчанию
     
     return {
+        'supplier_id': record.get('Номер осн. пост.', ''),
         'order_days': order_days,
-        'delivery_days': int(record.get('Срок доставки в магазин', 0))
+        'delivery_days': delivery_days
     }
 
 @dp.message(OrderStates.quantity_input)
