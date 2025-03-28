@@ -88,6 +88,14 @@ def confirm_keyboard():
     builder.adjust(2, 1)
     return builder.as_markup(resize_keyboard=True)
 
+
+def make_order_keyboard():
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="Сделать заказ")
+    builder.button(text="🏠 Главное меню")
+    builder.adjust(2, 1)
+    return builder.as_markup(resize_keyboard=True)
+
 # ===================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====================
 async def get_user_data(user_id: str):
     try:
