@@ -154,6 +154,7 @@ def parse_supplier_data(record):
         'supplier_id': record.get('Номер осн. пост.', ''),
         'order_days': order_days,
         'delivery_days': int(record.get('Срок доставки в магазин', 0))  # Количество дней на доставку
+        'supplier_name': record.get('Название осн. пост.', '')
     }
 
 # ===================== ОБРАБОТЧИКИ КОМАНД =====================
@@ -251,7 +252,8 @@ async def process_article(message: types.Message, state: FSMContext):
             department=product_data['Отдел'],
             order_date=order_date,
             delivery_date=delivery_date,
-            supplier_id=supplier_id
+            supplier_id=supplier_id,
+            supplier_name=supplier_data['supplier_name']
         )
         await message.answer(
             f"Магазин: {data['shop']}\n"
@@ -259,6 +261,7 @@ async def process_article(message: types.Message, state: FSMContext):
             f"🏷️ Название: {product_data['Название']}\n"
             f"📅 Дата заказа: {order_date}\n"
             f"🚚 Дата поставки: {delivery_date}\n"
+            f"🏭 Название поставщика: {supplier_data['supplier_name']}"
         )
         await message.answer("🔢 Введите количество товара:")
         await state.set_state(OrderStates.quantity_input)
@@ -289,6 +292,7 @@ async def process_order_reason(message: types.Message, state: FSMContext):
         f"🏷️ Название: {data['product_name']}\n"
         f"📅 Дата заказа: {data['order_date']}\n"
         f"🚚 Дата поставки: {data['delivery_date']}\n"
+        f"🏭 Название поставщика: {supplier_data['supplier_name']}"
         f"Количество: {data['quantity']}\n"
         f"Номер заказа/Причина: {order_reason}\n",
         reply_markup=confirm_keyboard()
@@ -385,16 +389,12 @@ async def process_article_info(message: types.Message, state: FSMContext):
             supplier_id=supplier_id
         )
         await message.answer(
-            f"Магазин: {data['shop']}
-"
-            f"📦 Артикул: {article}
-"
-            f"🏷️ Название: {product_data['Название']}
-"
-            f"📅 Дата заказа: {order_date}
-"
-            f"🚚 Дата поставки: {delivery_date}
-"
+            f"Магазин: {data['shop']}"
+            f"📦 Артикул: {article}"
+            f"🏷️ Название: {product_data['Название']}"
+            f"📅 Дата заказа: {order_date}"
+            f"🚚 Дата поставки: {delivery_date}"
+            f"🏭 Название поставщика: {supplier_data['supplier_name']}"
         )
         await message.answer("Выберите действие:", reply_markup=make_order_keyboard())
     except Exception as e:
