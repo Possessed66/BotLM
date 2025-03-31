@@ -452,14 +452,14 @@ async def process_article(message: types.Message, state: FSMContext):
 def parse_supplier_data(record):
     order_days = []
     for key in ['День выхода заказа', 'День выхода заказа 2', 'День выхода заказа 3']:
-        value = record.get(key, '').strip()
+        value = str(record.get(key, '')).strip()  # Преобразуем в строку перед strip()
         if value and value.isdigit():
             order_days.append(int(value))
     
-    delivery_days = record.get('Срок доставки в магазин', '0').strip()
+    delivery_days = str(record.get('Срок доставки в магазин', '0')).strip()
     return {
-        'supplier_id': record.get('Номер осн. пост.', ''),
-        'order_days': sorted(list(set(order_days))),  # Удаляем дубли и сортируем
+        'supplier_id': str(record.get('Номер осн. пост.', '')),
+        'order_days': sorted(list(set(order_days))),
         'delivery_days': int(delivery_days) if delivery_days.isdigit() else 0
     }
 
