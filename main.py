@@ -171,25 +171,6 @@ def validate_cache_keys():
 
 async def preload_cache():
     """Предзагрузка данных при старте бота"""
-    print("♻️ Начало предзагрузки кэша...")
-    
-    # Кэшируем основные данные
-    await cache_sheet_data(users_sheet, "users")  # Передаём объект листа и ключ кэша
-    await cache_sheet_data(gamma_cluster_sheet, "gamma_cluster")
-    
-    
-    # Кэшируем данные по магазинам
-    shops = users_sheet.col_values(5)[1:]  # Берем номера магазинов из колонки E
-    for shop in set(shops):
-        await cache_supplier_data(shop)
-    
-    print(f"✅ Кэш загружен. Всего элементов: {len(cache)}")
-    validate_cache_keys()
-
-
-
-async def preload_cache():
-    """Предзагрузка данных при старте бота"""
     startup_msg = "♻️ Начало предзагрузки кэша..."
     print(startup_msg)
     await notify_admins(startup_msg)
@@ -214,8 +195,6 @@ async def preload_cache():
         print(error_msg)
         await notify_admins(error_msg)
         raise
-
-
 
 
 # ===================== НОВЫЕ КОМАНДЫ ДЛЯ АДМИНОВ =====================
