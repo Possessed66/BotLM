@@ -174,8 +174,9 @@ async def preload_cache():
     print("♻️ Начало предзагрузки кэша...")
     
     # Кэшируем основные данные
-    await cache_sheet_data(USERS_SHEET_NAME, "users")
-    await cache_sheet_data(GAMMA_CLUSTER_SHEET, "gamma_cluster")
+    await cache_sheet_data(users_sheet, "users")  # Передаём объект листа и ключ кэша
+    await cache_sheet_data(gamma_cluster_sheet, "gamma_cluster")
+    
     
     # Кэшируем данные по магазинам
     shops = users_sheet.col_values(5)[1:]  # Берем номера магазинов из колонки E
