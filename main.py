@@ -162,18 +162,29 @@ async def toggle_service_mode(enable: bool):
 
 
 # ===================== СИСТЕМА КЭШИРОВАНИЯ =====================
-def validate_cache_keys():
-    required_keys = ['users', 'gamma_cluster']
-    for key in required_keys:
-        if key not in cache:
-            raise KeyError(f"Отсутствует обязательный ключ кэша: {key}")
+async def cache_sheet_data(sheet, cache_key: str):
+    """Кэширование данных из листа"""
+    try:
+        data = sheet.get_all_records()
+        cache[cache_key] = data
+        print(f"📥 Загружено в кэш: {cache_key} ({len(data)} записей)")
+    except Exception as e:
+        print(f"⚠️ Ошибка загрузки {cache_key}: {str(e)}")
 
+async def cache_supplier_data(shop: str):
+    """Кэширование данных поставщиков для магазина"""
+    cache_key = f"supplier_{shop}"
+    try:
+        sheet = get_supplier_dates_sheet(shop)
+        data = sheet.get_all_records()
+        cache[cache_key] = data
+        print(f"📦 Загружено поставщиков для магазина {shop}: {len(data)}")
+    except Exception as e:
+        print(f"⚠️ Ошибка загрузки поставщиков для магазина {shop}: {str(e)}")
 
 async def preload_cache():
     """Предзагрузка данных при старте бота"""
-    startup_msg = "♻️ Начало предзагрузки кэша..."
-    print(startup_msg)
-    await notify_admins(startup_msg)
+    print("♻️ Начало предзагрузки кэша...")
     
     try:
         # Кэшируем основные данные
@@ -185,16 +196,17 @@ async def preload_cache():
         for shop in set(shops):
             await cache_supplier_data(shop)
         
-        complete_msg = f"✅ Кэш загружен. Всего элементов: {len(cache)}"
-        print(complete_msg)
-        await notify_admins(complete_msg)
+        print(f"✅ Кэш загружен. Всего элементов: {len(cache)}")
         validate_cache_keys()
-        
     except Exception as e:
-        error_msg = f"⚠️ Ошибка загрузки кэша: {str(e)}"
-        print(error_msg)
-        await notify_admins(error_msg)
+        print(f"⚠️ Ошибка загрузки кэша: {str(e)}")
         raise
+
+def validate_cache_keys():
+    required_keys = ['users', 'gamma_cluster']
+    for key in required_keys:
+        if key not in cache:
+            raise KeyError(f"Отсутствует обязательный ключ кэша: {key}")
 
 
 # ===================== НОВЫЕ КОМАНДЫ ДЛЯ АДМИНОВ =====================
