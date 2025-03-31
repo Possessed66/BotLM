@@ -1,5 +1,7 @@
 import os
 import json
+from cachetools import TTLCache
+from typing import Dict, Any
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.client.default import DefaultBotProperties
@@ -12,6 +14,49 @@ import gspread
 from gspread.exceptions import APIError, SpreadsheetNotFound
 from aiohttp import web
 import logging
+import asyncio
+
+
+# ===================== КОНФИГУРАЦИЯ КЭША =====================
+CACHE_TTL = 43200  # 12 часов в секундах
+cache = TTLCache(maxsize=1000, ttl=CACHE_TTL)
+
+
+# ===================== СИСТЕМА КЭШИРОВАНИЯ =====================
+async def preload_cache():
+    """Предзагрузка данных при старте бота"""
+    print("♻️ Начало предзагрузки кэша...")
+    
+    # Кэшируем основные данные
+    await cache_sheet_data(USERS_SHEET_NAME, "users")
+    await cache_sheet_data(GAMMA_CLUSTER_SHEET, "gamma_cluster")
+    
+    # Кэшируем данные по магазинам
+    shops = users_sheet.col_values(5)[1:]  # Берем номера магазинов из колонки E
+    for shop in set(shops):
+        await cache_supplier_data(shop)
+    
+    print(f"✅ Кэш загружен. Всего элементов: {len(cache)}")
+
+async def cache_sheet_data(sheet, cache_key: str):
+    """Кэширование данных из листа"""
+    try:
+        data = sheet.get_all_records()
+        cache[cache_key] = data
+        print(f"📥 Загружено в кэш: {cache_key} ({len(data)} записей)")
+    except Exception as e:
+        print(f"⚠️ Ошибка загрузки {cache_key}: {str(e)}")
+
+async def cache_supplier_data(shop: str):
+    """Кэширование данных поставщиков для магазина"""
+    cache_key = f"supplier_{shop}"
+    try:
+        sheet = get_supplier_dates_sheet(shop)
+        data = sheet.get_all_records()
+        cache[cache_key] = data
+        print(f"📦 Загружено поставщиков для магазина {shop}: {len(data)}")
+    except Exception as e:
+        print(f"⚠️ Ошибка загрузки поставщиков для магазина {shop}: {str(e)}")
 
 # ===================== КОНФИГУРАЦИЯ =====================
 from dotenv import load_dotenv
@@ -77,6 +122,25 @@ class OrderStates(StatesGroup):
     order_reason_input = State()
 
 
+# ===================== ВСПОМОГАТЕЛЬНЫЙ КЛАСС =====================
+class FakeSheet:
+    """Имитация объекта листа для работы с кэшированными данными"""
+    def __init__(self, data):
+        self.data = data
+        self.headers = list(data[0].keys()) if data else []
+    
+    def find(self, value):
+        for idx, row in enumerate(self.data):
+            if str(value) in row.values():
+                return type('Cell', (), {'row': idx + 2})  # Эмулируем объект ячейки
+        raise gspread.exceptions.CellNotFound(value)
+    
+    def row_values(self, row):
+        return list(self.data[row-2].values()) if row-2 < len(self.data) else []
+    
+    def get_all_records(self):
+        return self.data
+
 # ===================== КЛАВИАТУРЫ =====================
 def main_menu_keyboard():
     builder = ReplyKeyboardBuilder()
@@ -103,15 +167,21 @@ def confirm_keyboard():
 
 
 # ===================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====================
-async def get_user_data(user_id: str):
+async def get_user_data(user_id: str) -> Dict[str, Any]:
+    cache_key = f"user_{user_id}"
+    if cache_key in cache:
+        return cache[cache_key]
+    
     try:
         cell = users_sheet.find(user_id)
-        return {
+        user_data = {
             'shop': users_sheet.cell(cell.row, 5).value,
             'name': users_sheet.cell(cell.row, 2).value,
             'surname': users_sheet.cell(cell.row, 3).value,
             'position': users_sheet.cell(cell.row, 4).value
         }
+        cache[cache_key] = user_data
+        return user_data
     except:
         return None
 
@@ -126,7 +196,14 @@ async def log_error(user_id: str, error: str):
 
 
 def get_supplier_dates_sheet(shop_number: str):
-    return orders_spreadsheet.worksheet(f"Даты выходов заказов {shop_number}")
+    cache_key = f"supplier_{shop_number}"
+    if cache_key in cache:
+        return FakeSheet(cache[cache_key])
+    
+    sheet = orders_spreadsheet.worksheet(f"Даты выходов заказов {shop_number}")
+    data = sheet.get_all_records()
+    cache[cache_key] = data
+    return FakeSheet(data)
 
 
 def calculate_delivery_date(supplier_data: dict) -> tuple:
@@ -182,7 +259,7 @@ async def process_surname(message: types.Message, state: FSMContext):
 @dp.message(Registration.position)
 async def process_position(message: types.Message, state: FSMContext):
     await state.update_data(position=message.text.strip())
-    await message.answer("🏪 Введите номер магазина (только цифры):")
+    await message.answer("🏪 Введите номер магазина (только цифры, без нулей):")
     await state.set_state(Registration.shop)
 
 
@@ -227,79 +304,89 @@ async def handle_client_order(message: types.Message, state: FSMContext):
 async def process_article(message: types.Message, state: FSMContext):
     article = message.text.strip()
     data = await state.get_data()
+    user_shop = data['shop']
+    
     try:
-        # Поиск строки по артикулу и магазину
-        unique_key = f"{article}{data['shop']}"
-        cell = gamma_cluster_sheet.find(unique_key)
-        if not cell:
+        # Используем кэшированные данные gamma_cluster
+        gamma_data = cache.get("gamma_cluster", [])
+        
+        # Ищем товар в кэше
+        product_data = next(
+            (item for item in gamma_data 
+             if str(item.get("Артикул")) == article 
+             and str(item.get("Магазин")) == user_shop),
+            None
+        )
+        
+        if not product_data:
             await message.answer("❌ Товар не найден.")
             return
 
-        # Получаем строку с данными товара
-        product_row = gamma_cluster_sheet.row_values(cell.row)
-        product_data = dict(zip(gamma_cluster_sheet.row_values(1), product_row))
-
-        # Извлекаем данные поставщика
-        supplier_id = str(product_data["Номер осн. пост."]).strip()
-        supplier_sheet = get_supplier_dates_sheet(data['shop'])
-
-        # Поиск строки по supplier_id
-        supplier_cell = supplier_sheet.find(supplier_id)
-        if not supplier_cell:
+        # Получаем данные поставщика из кэша
+        supplier_id = str(product_data.get("Номер осн. пост.", "")).strip()
+        supplier_sheet = get_supplier_dates_sheet(user_shop)
+        
+        # Ищем поставщика в кэшированных данных
+        supplier_data = next(
+            (item for item in supplier_sheet.data 
+             if str(item.get("Номер осн. пост.", "")).strip() == supplier_id),
+            None
+        )
+        
+        if not supplier_data:
             raise ValueError("Поставщик не найден")
 
-        # Получаем строку с данными поставщика
-        supplier_row = supplier_sheet.row_values(supplier_cell.row)
-        supplier_data = parse_supplier_data(dict(zip(supplier_sheet.row_values(1), supplier_row)))
-
+        # Парсим данные поставщика
+        parsed_supplier = parse_supplier_data(supplier_data)
+        
         # Рассчитываем даты
-        order_date, delivery_date = calculate_delivery_date(supplier_data)
+        order_date, delivery_date = calculate_delivery_date(parsed_supplier)
+        
+        # Обновляем состояние
         await state.update_data(
             article=article,
-            product_name=product_data['Название'],
-            department=product_data['Отдел'],
+            product_name=product_data.get('Название', ''),
+            department=product_data.get('Отдел', ''),
             order_date=order_date,
             delivery_date=delivery_date,
             supplier_id=supplier_id
         )
-        await message.answer(
-            f"Магазин: {data['shop']}\n"
+
+        # Формируем ответ
+        response = (
+            f"Магазин: {user_shop}\n"
             f"📦 Артикул: {article}\n"
-            f"🏷️ Название: {product_data['Название']}\n"
+            f"🏷️ Название: {product_data.get('Название', '')}\n"
             f"📅 Дата заказа: {order_date}\n"
             f"🚚 Дата поставки: {delivery_date}\n"
         )
+        
+        await message.answer(response)
         await message.answer("🔢 Введите количество товара:")
         await state.set_state(OrderStates.quantity_input)
+
+    except StopIteration:
+        await message.answer("❌ Товар не найден в системе")
+    except ValueError as ve:
+        await log_error(message.from_user.id, f"Value Error: {str(ve)}")
+        await message.answer(f"⚠️ Ошибка: {str(ve)}")
     except Exception as e:
-        await log_error(message.from_user.id, f"Article {article}: {str(e)}")
-        await message.answer(f"⚠️ Ошибка: {str(e)}")
+        await log_error(message.from_user.id, f"Unexpected error: {str(e)}")
+        await message.answer("⚠️ Произошла непредвиденная ошибка")
 
 
 def parse_supplier_data(record):
-    """
-    Извлекает необходимые данные из записи поставщика.
-    :param record: Словарь с данными поставщика.
-    :return: Словарь с извлеченными данными.
-    """
     order_days = []
-    # Извлекаем дни выхода заказа из трех столбцов
-    order_day_1 = record.get('День выхода заказа', '')
-    order_day_2 = record.get('День выхода заказа 2', '')
-    order_day_3 = record.get('День выхода заказа 3', '')
-
-    # Добавляем дни в список, если они не пустые
-    if order_day_1:
-        order_days.append(int(order_day_1))
-    if order_day_2:
-        order_days.append(int(order_day_2))
-    if order_day_3:
-        order_days.append(int(order_day_3))
-
+    for key in ['День выхода заказа', 'День выхода заказа 2', 'День выхода заказа 3']:
+        value = record.get(key, '').strip()
+        if value and value.isdigit():
+            order_days.append(int(value))
+    
+    delivery_days = record.get('Срок доставки в магазин', '0').strip()
     return {
         'supplier_id': record.get('Номер осн. пост.', ''),
-        'order_days': order_days,
-        'delivery_days': int(record.get('Срок доставки в магазин', 0))  # Количество дней на доставку
+        'order_days': sorted(list(set(order_days))),  # Удаляем дубли и сортируем
+        'delivery_days': int(delivery_days) if delivery_days.isdigit() else 0
     }
 
 
