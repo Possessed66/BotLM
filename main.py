@@ -9,6 +9,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.enums import ParseMode
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
+from aiogram.exceptions import TelegramForbiddenError
+from contextlib import suppress
 from google.oauth2.service_account import Credentials
 import gspread
 from gspread.exceptions import APIError, SpreadsheetNotFound
@@ -17,12 +19,76 @@ import logging
 import asyncio
 
 
+# ===================== КОНФИГУРАЦИЯ СЕРВИСНОГО РЕЖИМА =====================
+SERVICE_MODE = False
+ADMINS = [122086799]  # ID администраторов
+
 # ===================== КОНФИГУРАЦИЯ КЭША =====================
 CACHE_TTL = 43200  # 12 часов в секундах
 cache = TTLCache(maxsize=1000, ttl=CACHE_TTL)
 
 
+
+# ===================== СЕРВИСНЫЙ РЕЖИМ =====================
+async def notify_admins(message: str):
+    """Уведомление администраторов"""
+    for admin_id in ADMINS:
+        with suppress(TelegramForbiddenError):
+            await bot.send_message(admin_id, message)
+
+async def broadcast(message: str):
+    """Рассылка сообщения всем пользователям"""
+    users = users_sheet.col_values(1)[1:]  # ID пользователей из колонки A
+    for user_id in users:
+        with suppress(TelegramForbiddenError, ValueError):
+            await bot.send_message(int(user_id), message)
+
+async def toggle_service_mode(enable: bool):
+    """Включение/выключение сервисного режима"""
+    global SERVICE_MODE
+    SERVICE_MODE = enable
+    status = "ВКЛЮЧЕН" if enable else "ВЫКЛЮЧЕН"
+    await notify_admins(f"🛠 Сервисный режим {status}")
+
+
+
+# ===================== НОВЫЕ КОМАНДЫ ДЛЯ АДМИНОВ =====================
+@dp.message(F.text == "/maintenance_on")
+async def maintenance_on(message: types.Message):
+    if message.from_user.id not in ADMINS:
+        return
+    
+    await toggle_service_mode(True)
+    await broadcast("🔧 Бот временно недоступен. Идет обновление системы...")
+    await message.answer("Сервисный режим активирован")
+
+@dp.message(F.text == "/maintenance_off")
+async def maintenance_off(message: types.Message):
+    if message.from_user.id not in ADMINS:
+        return
+    
+    await toggle_service_mode(False)
+    await broadcast("✅ Обновление завершено! Бот снова в работе.")
+    await message.answer("Сервисный режим деактивирован")
+
+
+# ===================== ОБНОВЛЕННЫЙ МИДЛВАР =====================
+@dp.update.middleware()
+async def service_mode_middleware(handler, event, data):
+    if SERVICE_MODE and event.message:
+        with suppress(TelegramForbiddenError):
+            await event.message.answer("⏳ Бот в режиме обслуживания. Попробуйте позже.")
+        return
+    return await handler(event, data)
+
 # ===================== СИСТЕМА КЭШИРОВАНИЯ =====================
+def validate_cache_keys():
+    required_keys = ['users', 'gamma_cluster']
+    for key in required_keys:
+        if key not in cache:
+            raise KeyError(f"Отсутствует обязательный ключ кэша: {key}")
+
+
 async def preload_cache():
     """Предзагрузка данных при старте бота"""
     print("♻️ Начало предзагрузки кэша...")
@@ -37,7 +103,7 @@ async def preload_cache():
         await cache_supplier_data(shop)
     
     print(f"✅ Кэш загружен. Всего элементов: {len(cache)}")
-
+    validate_cache_keys()
 async def cache_sheet_data(sheet, cache_key: str):
     """Кэширование данных из листа"""
     try:
@@ -82,6 +148,8 @@ LOGS_SHEET = "Логи"
 WEBHOOK_HOST = os.getenv('WEBHOOK_HOST')  # Например: https://your-bot.render.com
 WEBHOOK_PATH = "/webhook"  # Путь для веб-хука
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+
+
 
 # ===================== ИНИЦИАЛИЗАЦИЯ =====================
 credentials = Credentials.from_service_account_info(
@@ -485,13 +553,22 @@ async def handle_stock_check(message: types.Message):
 
 # ===================== ОБРАБОТЧИК ВЕБХУКОВ =====================
 async def on_startup(app):
-    await bot.set_webhook(url=WEBHOOK_URL)
-    logging.info(f"Webhook URL: {WEBHOOK_URL}")
-
+    await bot.set_webhook(WEBHOOK_URL)
+    startup_msg = "🟢 Бот запущен"
+    print(startup_msg)
+    await notify_admins(startup_msg)
+    
+    try:
+        await preload_cache()
+    except Exception as e:
+        await notify_admins(f"🚨 Критическая ошибка запуска: {str(e)}")
+        raise
 
 async def on_shutdown(app):
+    shutdown_msg = "🔴 Бот остановлен"
+    print(shutdown_msg)
+    await notify_admins(shutdown_msg)
     await bot.delete_webhook()
-    await bot.session.close()
 
 
 async def handle_webhook(request):
