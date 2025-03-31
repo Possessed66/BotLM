@@ -27,103 +27,6 @@ ADMINS = [122086799]  # ID администраторов
 CACHE_TTL = 43200  # 12 часов в секундах
 cache = TTLCache(maxsize=1000, ttl=CACHE_TTL)
 
-
-
-# ===================== СЕРВИСНЫЙ РЕЖИМ =====================
-async def notify_admins(message: str):
-    """Уведомление администраторов"""
-    for admin_id in ADMINS:
-        with suppress(TelegramForbiddenError):
-            await bot.send_message(admin_id, message)
-
-async def broadcast(message: str):
-    """Рассылка сообщения всем пользователям"""
-    users = users_sheet.col_values(1)[1:]  # ID пользователей из колонки A
-    for user_id in users:
-        with suppress(TelegramForbiddenError, ValueError):
-            await bot.send_message(int(user_id), message)
-
-async def toggle_service_mode(enable: bool):
-    """Включение/выключение сервисного режима"""
-    global SERVICE_MODE
-    SERVICE_MODE = enable
-    status = "ВКЛЮЧЕН" if enable else "ВЫКЛЮЧЕН"
-    await notify_admins(f"🛠 Сервисный режим {status}")
-
-
-
-# ===================== НОВЫЕ КОМАНДЫ ДЛЯ АДМИНОВ =====================
-@dp.message(F.text == "/maintenance_on")
-async def maintenance_on(message: types.Message):
-    if message.from_user.id not in ADMINS:
-        return
-    
-    await toggle_service_mode(True)
-    await broadcast("🔧 Бот временно недоступен. Идет обновление системы...")
-    await message.answer("Сервисный режим активирован")
-
-@dp.message(F.text == "/maintenance_off")
-async def maintenance_off(message: types.Message):
-    if message.from_user.id not in ADMINS:
-        return
-    
-    await toggle_service_mode(False)
-    await broadcast("✅ Обновление завершено! Бот снова в работе.")
-    await message.answer("Сервисный режим деактивирован")
-
-
-# ===================== ОБНОВЛЕННЫЙ МИДЛВАР =====================
-@dp.update.middleware()
-async def service_mode_middleware(handler, event, data):
-    if SERVICE_MODE and event.message:
-        with suppress(TelegramForbiddenError):
-            await event.message.answer("⏳ Бот в режиме обслуживания. Попробуйте позже.")
-        return
-    return await handler(event, data)
-
-# ===================== СИСТЕМА КЭШИРОВАНИЯ =====================
-def validate_cache_keys():
-    required_keys = ['users', 'gamma_cluster']
-    for key in required_keys:
-        if key not in cache:
-            raise KeyError(f"Отсутствует обязательный ключ кэша: {key}")
-
-
-async def preload_cache():
-    """Предзагрузка данных при старте бота"""
-    print("♻️ Начало предзагрузки кэша...")
-    
-    # Кэшируем основные данные
-    await cache_sheet_data(USERS_SHEET_NAME, "users")
-    await cache_sheet_data(GAMMA_CLUSTER_SHEET, "gamma_cluster")
-    
-    # Кэшируем данные по магазинам
-    shops = users_sheet.col_values(5)[1:]  # Берем номера магазинов из колонки E
-    for shop in set(shops):
-        await cache_supplier_data(shop)
-    
-    print(f"✅ Кэш загружен. Всего элементов: {len(cache)}")
-    validate_cache_keys()
-async def cache_sheet_data(sheet, cache_key: str):
-    """Кэширование данных из листа"""
-    try:
-        data = sheet.get_all_records()
-        cache[cache_key] = data
-        print(f"📥 Загружено в кэш: {cache_key} ({len(data)} записей)")
-    except Exception as e:
-        print(f"⚠️ Ошибка загрузки {cache_key}: {str(e)}")
-
-async def cache_supplier_data(shop: str):
-    """Кэширование данных поставщиков для магазина"""
-    cache_key = f"supplier_{shop}"
-    try:
-        sheet = get_supplier_dates_sheet(shop)
-        data = sheet.get_all_records()
-        cache[cache_key] = data
-        print(f"📦 Загружено поставщиков для магазина {shop}: {len(data)}")
-    except Exception as e:
-        print(f"⚠️ Ошибка загрузки поставщиков для магазина {shop}: {str(e)}")
-
 # ===================== КОНФИГУРАЦИЯ =====================
 from dotenv import load_dotenv
 
@@ -232,6 +135,108 @@ def confirm_keyboard():
     builder.button(text="❌ Отмена")
     builder.adjust(2, 1)
     return builder.as_markup(resize_keyboard=True)
+
+
+# ===================== СЕРВИСНЫЙ РЕЖИМ =====================
+async def notify_admins(message: str):
+    """Уведомление администраторов"""
+    for admin_id in ADMINS:
+        with suppress(TelegramForbiddenError):
+            await bot.send_message(admin_id, message)
+
+async def broadcast(message: str):
+    """Рассылка сообщения всем пользователям"""
+    users = users_sheet.col_values(1)[1:]  # ID пользователей из колонки A
+    for user_id in users:
+        with suppress(TelegramForbiddenError, ValueError):
+            await bot.send_message(int(user_id), message)
+
+async def toggle_service_mode(enable: bool):
+    """Включение/выключение сервисного режима"""
+    global SERVICE_MODE
+    SERVICE_MODE = enable
+    status = "ВКЛЮЧЕН" if enable else "ВЫКЛЮЧЕН"
+    await notify_admins(f"🛠 Сервисный режим {status}")
+
+
+
+
+# ===================== СИСТЕМА КЭШИРОВАНИЯ =====================
+def validate_cache_keys():
+    required_keys = ['users', 'gamma_cluster']
+    for key in required_keys:
+        if key not in cache:
+            raise KeyError(f"Отсутствует обязательный ключ кэша: {key}")
+
+
+async def preload_cache():
+    """Предзагрузка данных при старте бота"""
+    print("♻️ Начало предзагрузки кэша...")
+    
+    # Кэшируем основные данные
+    await cache_sheet_data(USERS_SHEET_NAME, "users")
+    await cache_sheet_data(GAMMA_CLUSTER_SHEET, "gamma_cluster")
+    
+    # Кэшируем данные по магазинам
+    shops = users_sheet.col_values(5)[1:]  # Берем номера магазинов из колонки E
+    for shop in set(shops):
+        await cache_supplier_data(shop)
+    
+    print(f"✅ Кэш загружен. Всего элементов: {len(cache)}")
+    validate_cache_keys()
+async def cache_sheet_data(sheet, cache_key: str):
+    """Кэширование данных из листа"""
+    try:
+        data = sheet.get_all_records()
+        cache[cache_key] = data
+        print(f"📥 Загружено в кэш: {cache_key} ({len(data)} записей)")
+    except Exception as e:
+        print(f"⚠️ Ошибка загрузки {cache_key}: {str(e)}")
+
+async def cache_supplier_data(shop: str):
+    """Кэширование данных поставщиков для магазина"""
+    cache_key = f"supplier_{shop}"
+    try:
+        sheet = get_supplier_dates_sheet(shop)
+        data = sheet.get_all_records()
+        cache[cache_key] = data
+        print(f"📦 Загружено поставщиков для магазина {shop}: {len(data)}")
+    except Exception as e:
+        print(f"⚠️ Ошибка загрузки поставщиков для магазина {shop}: {str(e)}")
+
+
+
+
+
+# ===================== НОВЫЕ КОМАНДЫ ДЛЯ АДМИНОВ =====================
+@dp.message(F.text == "/maintenance_on")
+async def maintenance_on(message: types.Message):
+    if message.from_user.id not in ADMINS:
+        return
+    
+    await toggle_service_mode(True)
+    await broadcast("🔧 Бот временно недоступен. Идет обновление системы...")
+    await message.answer("Сервисный режим активирован")
+
+@dp.message(F.text == "/maintenance_off")
+async def maintenance_off(message: types.Message):
+    if message.from_user.id not in ADMINS:
+        return
+    
+    await toggle_service_mode(False)
+    await broadcast("✅ Обновление завершено! Бот снова в работе.")
+    await message.answer("Сервисный режим деактивирован")
+
+
+# ===================== ОБНОВЛЕННЫЙ МИДЛВАР =====================
+@dp.update.middleware()
+async def service_mode_middleware(handler, event, data):
+    if SERVICE_MODE and event.message:
+        with suppress(TelegramForbiddenError):
+            await event.message.answer("⏳ Бот в режиме обслуживания. Попробуйте позже.")
+        return
+    return await handler(event, data)
+
 
 
 # ===================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====================
