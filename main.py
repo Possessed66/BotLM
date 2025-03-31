@@ -185,26 +185,35 @@ async def preload_cache():
     
     print(f"✅ Кэш загружен. Всего элементов: {len(cache)}")
     validate_cache_keys()
-async def cache_sheet_data(sheet, cache_key: str):
-    """Кэширование данных из листа"""
-    try:
-        data = sheet.get_all_records()
-        cache[cache_key] = data
-        print(f"📥 Загружено в кэш: {cache_key} ({len(data)} записей)")
-    except Exception as e:
-        print(f"⚠️ Ошибка загрузки {cache_key}: {str(e)}")
 
-async def cache_supplier_data(shop: str):
-    """Кэширование данных поставщиков для магазина"""
-    cache_key = f"supplier_{shop}"
-    try:
-        sheet = get_supplier_dates_sheet(shop)
-        data = sheet.get_all_records()
-        cache[cache_key] = data
-        print(f"📦 Загружено поставщиков для магазина {shop}: {len(data)}")
-    except Exception as e:
-        print(f"⚠️ Ошибка загрузки поставщиков для магазина {shop}: {str(e)}")
 
+
+async def preload_cache():
+    """Предзагрузка данных при старте бота"""
+    startup_msg = "♻️ Начало предзагрузки кэша..."
+    print(startup_msg)
+    await notify_admins(startup_msg)
+    
+    try:
+        # Кэшируем основные данные
+        await cache_sheet_data(users_sheet, "users")
+        await cache_sheet_data(gamma_cluster_sheet, "gamma_cluster")
+        
+        # Кэшируем данные по магазинам
+        shops = users_sheet.col_values(5)[1:]
+        for shop in set(shops):
+            await cache_supplier_data(shop)
+        
+        complete_msg = f"✅ Кэш загружен. Всего элементов: {len(cache)}"
+        print(complete_msg)
+        await notify_admins(complete_msg)
+        validate_cache_keys()
+        
+    except Exception as e:
+        error_msg = f"⚠️ Ошибка загрузки кэша: {str(e)}"
+        print(error_msg)
+        await notify_admins(error_msg)
+        raise
 
 
 
@@ -555,6 +564,19 @@ async def handle_info_request(message: types.Message):
 @dp.message(F.text == "📦 Проверка стока")
 async def handle_stock_check(message: types.Message):
     await message.answer("🛠️ Функция в разработке")
+
+
+@dp.message(F.text == "/reload_cache")
+async def reload_cache_command(message: types.Message):
+    if message.from_user.id not in ADMINS:
+        return
+    
+    try:
+        await message.answer("🔄 Начинаю перезагрузку кэша...")
+        await preload_cache()
+        await message.answer("✅ Кэш успешно перезагружен")
+    except Exception as e:
+        await message.answer(f"⚠️ Ошибка перезагрузки кэша: {str(e)}")
 
 
 # ===================== ОБРАБОТЧИК ВЕБХУКОВ =====================
