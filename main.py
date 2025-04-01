@@ -499,8 +499,28 @@ async def process_order_reason(message: types.Message, state: FSMContext):
 async def final_confirmation(message: types.Message, state: FSMContext):
     data = await state.get_data()
     try:
+        # Проверка обязательных полей
+        required_fields = {
+            'department': str,
+            'shop': str,
+            'article': str,
+            'order_reason': str,
+            'quantity': int
+        }
+        
+        for field, field_type in required_fields.items():
+            value = data.get(field)
+            if not value:
+                raise ValueError(f"Отсутствует поле: {field}")
+            if not isinstance(value, field_type):
+                raise TypeError(f"Некорректный тип {field}: {type(value)} вместо {field_type}")
+
+        # Логирование данных перед записью
+        logging.info(f"Попытка записи в лист: {data['department']")
+        logging.info(f"Данные заказа: {data}")
+
+        # Получаем лист отдела
         department_sheet = orders_spreadsheet.worksheet(data['department'])
-        next_row = len(department_sheet.col_values(1)) + 1
         # СОЗДАЁМ СПИСОК ОБНОВЛЕНИЙ
         updates = [
             {'range': f'A{next_row}', 'values': [[data['shop']]]},          # Магазин
