@@ -587,14 +587,14 @@ async def handle_stock_check(message: types.Message):
 
 
 @dp.message(F.text == "/reload_cache")
-async def reload_cache(message: types.Message):
+async def preload_cache(message: types.Message):
     try:
         # Принудительная очистка кэша
         cache.clear()
         
         # Загрузка основных данных
-        users_data = await get_cached_data(users_sheet, "users")
-        gamma_data = await get_cached_data(gamma_cluster_sheet, "gamma_cluster")
+        users_data = await preload_cache(users_sheet, "users")
+        gamma_data = await preload_cache(gamma_cluster_sheet, "gamma_cluster")
         
         if not users_data or not gamma_data:
             raise ValueError("Не удалось загрузить основные таблицы")
