@@ -52,7 +52,12 @@ GAMMA_CLUSTER_SHEET = "Гамма кластер"
 LOGS_SHEET = "Логи"
 
 # Конфигурация для веб-хуков
+# В секции конфигурации
 USE_WEBHOOKS = os.getenv('USE_WEBHOOKS', 'false').lower() == 'true'
+
+# Добавить проверку для вебхук-режима
+if USE_WEBHOOKS and not WEBHOOK_HOST.startswith("https://"):
+    raise ValueError("WEBHOOK_HOST must be HTTPS URL in webhook mode")
 WEBHOOK_HOST = os.getenv('WEBHOOK_HOST')  # Например: https://your-bot.render.com
 WEBHOOK_PATH = "/webhook"  # Путь для веб-хука
 WEBHOOK_PORT = 8443
@@ -687,18 +692,18 @@ async def shutdown():
 
 # ===================== ОБРАБОТЧИК ВЕБХУКОВ =====================
 async def handle_webhook(request):
-    """Единый обработчик вебхуков"""
-    if USE_WEBHOOKS:
-        update_data = await request.json()
-        update = types.Update(**update_data)
-        await dp.feed_update(bot=bot, update=update)
+    """Обработчик вебхуков"""
+    update_data = await request.json()
+    update = types.Update(**update_data)
+    await dp.feed_update(bot=bot, update=update)
     return web.Response(text="OK", status=200)
 
 # ===================== ИНИЦИАЛИЗАЦИЯ ПРИЛОЖЕНИЯ =====================
 app = web.Application()
-app.router.add_post(WEBHOOK_PATH, handle_webhook)
-app.on_startup.append(lambda _: startup())
-app.on_shutdown.append(lambda _: shutdown())
+if USE_WEBHOOKS:
+    app.router.add_post(WEBHOOK_PATH, handle_webhook)
+    app.on_startup.append(lambda _: startup())
+    app.on_shutdown.append(lambda _: shutdown())
 
 # ===================== УНИВЕРСАЛЬНЫЙ ЗАПУСК =====================
 async def main():
@@ -706,6 +711,7 @@ async def main():
     await startup()
     
     if USE_WEBHOOKS:
+        # Только в вебхук-режиме
         await bot.set_webhook(
             url=WEBHOOK_URL,
             drop_pending_updates=True
@@ -714,11 +720,12 @@ async def main():
         await runner.setup()
         site = web.TCPSite(runner, '0.0.0.0', WEBHOOK_PORT)
         await site.start()
-        print(f"✅ Bot is running in webhook mode: {WEBHOOK_URL}")
+        print(f"✅ Режим вебхуков: {WEBHOOK_URL}")
         while True:
             await asyncio.sleep(3600)
     else:
-        print("✅ Bot is running in polling mode")
+        # Режим поллинга
+        print("✅ Режим поллинга")
         await dp.start_polling(bot, skip_updates=True)
 
 # ===================== ЗАВЕРШЕНИЕ РАБОТЫ =====================
