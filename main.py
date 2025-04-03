@@ -385,7 +385,7 @@ async def handle_client_order(message: types.Message, state: FSMContext):
 @dp.message(OrderStates.article_input)
 async def process_article(message: types.Message, state: FSMContext):
     gamma_data = cache.get("gamma_cluster", [])
-if not gamma_data:
+    if not gamma_data:
     await message.answer("❌ Кэш товаров не загружен")
     return
     article = message.text.strip()
