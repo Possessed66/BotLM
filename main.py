@@ -491,6 +491,7 @@ async def process_quantity(message: types.Message, state: FSMContext):
 async def process_order_reason(message: types.Message, state: FSMContext):
     data = await state.get_data()
     order_reason = message.text.strip()
+    user_shop = data['shop']
     # Обновляем состояние
     await state.update_data(order_reason=order_reason)
     # Вывод информации для подтверждения
