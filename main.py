@@ -431,6 +431,15 @@ async def process_article(message: types.Message, state: FSMContext):
         if not supplier_data:
             raise ValueError("Поставщик не найден")
 
+        # Получаем название поставщика (столбец B в листе поставщиков)
+        supplier_name = supplier_data.get("Название осн. пост.", "")  # Проверьте точное название столбца!
+        if not supplier_name:
+            gamma_item = next(
+            (item for item in gamma_data 
+             if str(item.get("Номер осн. пост.", "")).strip() == supplier_id),
+            None
+            )
+        supplier_name = gamma_item.get("Поставщик", "") if gamma_item else "Неизвестный поставщик"
         # Парсим данные поставщика
         parsed_supplier = parse_supplier_data(supplier_data)
         
@@ -452,6 +461,7 @@ async def process_article(message: types.Message, state: FSMContext):
             f"Магазин: {user_shop}\n"
             f"📦 Артикул: {article}\n"
             f"🏷️ Название: {product_data.get('Название', '')}\n"
+            f"🏭 Поставщик: {supplier_name}\n"
             f"📅 Дата заказа: {order_date}\n"
             f"🚚 Дата поставки: {delivery_date}\n"
         )
@@ -480,6 +490,7 @@ def parse_supplier_data(record):
     delivery_days = str(record.get('Срок доставки в магазин', '0')).strip()
     return {
         'supplier_id': str(record.get('Номер осн. пост.', '')),
+        'name': str(record.get('Название осн. пост.', '')),
         'order_days': sorted(list(set(order_days))),
         'delivery_days': int(delivery_days) if delivery_days.isdigit() else 0
     }
@@ -509,6 +520,7 @@ async def process_order_reason(message: types.Message, state: FSMContext):
         f"Магазин: {user_shop}\n"
         f"📦 Артикул: {data['article']}\n"
         f"🏷️ Название: {data['product_name']}\n"
+        f"🏭 Поставщик: {data.get('supplier_name', 'Неизвестен')}\n"
         f"📅 Дата заказа: {data['order_date']}\n"
         f"🚚 Дата поставки: {data['delivery_date']}\n"
         f"Количество: {data['quantity']}\n"
