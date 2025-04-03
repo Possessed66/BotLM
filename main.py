@@ -50,6 +50,7 @@ LOGS_SHEET = "Логи"
 # Конфигурация для веб-хуков
 WEBHOOK_HOST = os.getenv('WEBHOOK_HOST')  # Например: https://your-bot.render.com
 WEBHOOK_PATH = "/webhook"  # Путь для веб-хука
+WEBHOOK_PORT = 8443
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
 
@@ -637,62 +638,79 @@ async def check_cache(message: types.Message):
         f"Пример: {gamma_data[:1] if gamma_data else 'Нет данных'}"
     )
     await message.answer(response)
-# ===================== ОБРАБОТЧИК ВЕБХУКОВ =====================
-#async def on_startup(app):
-   # await bot.set_webhook(WEBHOOK_URL)
-   # startup_msg = "🟢 Бот запущен"
-   # print(startup_msg)
-   # print(f"Кэш после загрузки: {list(cache.keys())}")
-   # await notify_admins(startup_msg)
+
+
+
+# ===================== ОБЩАЯ ЛОГИКА ЗАПУСКА =====================
+async def startup():
+    """Общая инициализация для всех режимов"""
+    startup_msg = "🟢 Бот запущен"
+    print(startup_msg)
     
-   # try:
-   #     await preload_cache()
-   # except Exception as e:
-   #     await notify_admins(f"🚨 Критическая ошибка запуска: {str(e)}")
-   #     raise
-
-#async def on_shutdown(app):
-  #  shutdown_msg = "🔴 Бот остановлен"
-# print(shutdown_msg)
- #   await notify_admins(shutdown_msg)
-  #  await bot.delete_webhook()
-
-
-#async def handle_webhook(request):
- #   update = types.Update(**await request.json())
-  #  await dp.feed_update(bot=bot, update=update)
-   # return web.Response(text="Ok", status=200)
-
-
-# ИНИЦИАЛИЗАЦИЯ АППЛИКАЦИИ ОДИН РАЗ
-#app = web.Application()
-#app.router.add_post(WEBHOOK_PATH, handle_webhook)
-#app.on_startup.append(on_startup)
-#app.on_shutdown.append(on_shutdown)
-
-
-#@dp.message(lambda message: 'order_update' in message.text)
-#async def send_order_notification(message: types.Message):
- #   try:
- #       data = message.text.split('\n')
- #       chat_id = data[1]
- #       order_info = '\n'.join(data[2:])
- #       await bot.send_message(chat_id=chat_id, text=order_info, parse_mode=ParseMode.HTML)
-  #  except Exception as e:
-  #      logging.error(f"Ошибка отправки уведомления: {str(e)}")
-
-
-async def main():
     try:
-        print("🔄 Начало загрузки кэша...")
-        await preload_cache()  # Без аргументов
-        print("✅ Кэш успешно загружен")
+        print("♻️ Начало загрузки кэша...")
+        await preload_cache()
+        print(f"✅ Кэш загружен. Ключи: {list(cache.keys())[:5]}...")  # Логируем первые 5 ключей
+        await notify_admins(startup_msg)
     except Exception as e:
-        print(f"🚨 Критическая ошибка загрузки кэша: {str(e)}")
-        exit(1)
+        error_msg = f"🚨 Критическая ошибка запуска: {str(e)}"
+        print(error_msg)
+        await notify_admins(error_msg)
+        raise
+
+async def shutdown():
+    """Общая логика завершения работы"""
+    shutdown_msg = "🔴 Бот остановлен"
+    print(shutdown_msg)
+    await notify_admins(shutdown_msg)
+    if USE_WEBHOOKS:
+        await bot.delete_webhook()
+
+
+
+# ===================== ОБРАБОТЧИК ВЕБХУКОВ =====================
+async def handle_webhook(request):
+    """Единый обработчик вебхуков"""
+    if USE_WEBHUOKS:
+        update = types.Update(**await request.json())
+        await dp.feed_update(bot=bot, update=update)
+    return web.Response(text="OK", status=200)
+
+# ===================== ИНИЦИАЛИЗАЦИЯ ПРИЛОЖЕНИЯ =====================
+app = web.Application()
+app.router.add_post(WEBHOOK_PATH, handle_webhook)
+app.on_startup.append(lambda _: startup())
+app.on_shutdown.append(lambda _: shutdown())
+
+# ===================== УНИВЕРСАЛЬНЫЙ ЗАПУСК =====================
+async def main():
+    """Главная функция запуска"""
+    await startup()  # Всегда запускаем инициализацию
     
-    await dp.start_polling(bot, skip_updates=True)
+    if USE_WEBHOOKS:
+        # Настройка вебхуков
+        await bot.set_webhook(
+            url=WEBHOOK_URL,
+            drop_pending_updates=True
+        )
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, '0.0.0.0', WEBHOOK_PORT)
+        await site.start()
+        print(f"Bot is running on webhook mode: {WEBHOOK_URL}")
+        
+        # Бесконечное ожидание
+        while True:
+            await asyncio.sleep(3600)
+    else:
+        # Режим поллинга
+        print("Bot is running in polling mode")
+        await dp.start_polling(bot, skip_updates=True)
 
 if __name__ == "__main__":
-  
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Bot stopped by user")
+    finally:
+        asyncio.run(shutdown())
