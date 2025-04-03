@@ -17,7 +17,9 @@ from aiohttp import web
 import logging
 import asyncio
 from cachetools import cached, TTLCache
+import logging
 
+logging.basicConfig(level=logging.INFO)
 
 # ===================== КОНФИГУРАЦИЯ СЕРВИСНОГО РЕЖИМА =====================
 SERVICE_MODE = False
@@ -659,23 +661,24 @@ async def startup():
         raise
 
 async def shutdown():
-    """Общая логика завершения работы"""
-    shutdown_msg = "🔴 Бот остановлен"
-    print(shutdown_msg)
-    
-    # Отправка уведомлений ДО закрытия сессий
+    """Завершение работы с гарантированным закрытием ресурсов"""
     try:
-        await notify_admins(shutdown_msg)
+        # Закрытие сессий AIOHTTP
+        await bot.session.close()
+        await dp.storage.close()
+        
+        # Закрытие вебхука
+        if USE_WEBHOOKS:
+            await bot.delete_webhook()
+            
     except Exception as e:
-        print(f"Ошибка отправки уведомления: {str(e)}")
-
-    # Закрытие сессий
-    if USE_WEBHOOKS:
-        await bot.delete_webhook()
-    
-    # Явное закрытие клиента aiohttp
-    await bot.session.close()
-    await dp.storage.close()
+        print(f"Ошибка при завершении: {str(e)}")
+        
+    finally:
+        # Принудительное завершение всех задач
+        tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        for task in tasks:
+            task.cancel()
 
 
 
@@ -720,14 +723,20 @@ async def main():
 
 if __name__ == "__main__":
     try:
+        # Инициализация новой event loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        
+        # Основной цикл
         loop.run_until_complete(main())
+        
     except KeyboardInterrupt:
         print("\nBot stopped by user")
+        
+    except Exception as e:
+        print(f"Critical error: {str(e)}")
+        
     finally:
-        # Явное закрытие всех асинхронных задач
-        tasks = asyncio.all_tasks(loop)
-        for task in tasks:
-            task.cancel()
+        # Гарантированное завершение
+        loop.run_until_complete(shutdown())
         loop.close()
