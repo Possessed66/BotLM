@@ -588,23 +588,21 @@ async def handle_stock_check(message: types.Message):
 
 
 @dp.message(F.text == "/reload_cache")
-async def preload_cache(message: types.Message):
+async def reload_cache_command(message: types.Message):  # Изменено имя функции
     try:
         # Принудительная очистка кэша
         cache.clear()
         
         # Загрузка основных данных
-        users_data = await preload_cache(users_sheet, "users")
-        gamma_data = await preload_cache(gamma_cluster_sheet, "gamma_cluster")
-        
-        if not users_data or not gamma_data:
-            raise ValueError("Не удалось загрузить основные таблицы")
+        await cache_sheet_data(users_sheet, "users")
+        await cache_sheet_data(gamma_cluster_sheet, "gamma_cluster")
         
         # Дополнительная проверка данных
+        gamma_data = cache.get("gamma_cluster", [])
         test_article = gamma_data[0].get("Артикул") if gamma_data else None
         response = (
             f"✅ Кэш перезагружен\n"
-            f"• Пользователей: {len(users_data)}\n"
+            f"• Пользователей: {len(cache['users'])}\n"
             f"• Товаров: {len(gamma_data)}\n"
             f"• Тестовый артикул: {test_article or 'Нет данных'}"
         )
@@ -692,19 +690,14 @@ async def check_cache(message: types.Message):
 
 
 async def main():
-    # Закомментируйте вебхуки, если они не используются
-    # await bot.delete_webhook()  # На всякий случай
-    
-    # Предзагрузка кэша перед стартом
     try:
         print("🔄 Начало загрузки кэша...")
-        await preload_cache()
+        await preload_cache()  # Без аргументов
         print("✅ Кэш успешно загружен")
     except Exception as e:
         print(f"🚨 Критическая ошибка загрузки кэша: {str(e)}")
         exit(1)
     
-    # Запуск поллинга
     await dp.start_polling(bot, skip_updates=True)
 
 if __name__ == "__main__":
