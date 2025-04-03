@@ -513,54 +513,40 @@ async def final_confirmation(message: types.Message, state: FSMContext):
     data = await state.get_data()
     try:
         # Проверка обязательных полей
-        required_fields = {
-            'department': str,
-            'shop': str,
-            'article': str,
-            'order_reason': str,
-            'quantity': int
-        }
-        
-        for field, field_type in required_fields.items():
-            value = data.get(field)
-            if not value:
-                raise ValueError(f"Отсутствует поле: {field}")
-            if not isinstance(value, field_type):
-                raise TypeError(f"Некорректный тип {field}: {type(value)} вместо {field_type}")
-
-        # Логирование данных перед записью
-        logging.info(f"Попытка записи в лист: {data['department']}")
-        logging.info(f"Данные заказа: {data}")
-        
-        # Получаем лист отдела
-        department_sheet = orders_spreadsheet.worksheet(data['department'])
-         # Получаем номер следующей строки
-        next_row = len(department_sheet.col_values(1)) + 1  # Колонка A
-
-        
-        # СОЗДАЁМ СПИСОК ОБНОВЛЕНИЙ
-        updates = [
-            {'range': f'A{next_row}', 'values': [[data['shop']]]},          # Магазин
-            {'range': f'B{next_row}', 'values': [[data['article']]]},       # Артикул
-            {'range': f'C{next_row}', 'values': [[data['order_reason']]]},  # Причина/Номер
-            {'range': f'D{next_row}', 'values': [[datetime.now().strftime("%d.%m.%Y %H:%M")]]},  # Дата заказа
-            {'range': f'E{next_row}', 'values': [[f"{data['user_name']}, {data['user_position']}"]]},  # Имя/Должность
-            {'range': f'K{next_row}', 'values': [[str(data['quantity'])]]},  # Количество
-            {'range': f'R{next_row}', 'values': [[str(message.from_user.id)]]},  # Chat ID
-        ]
-        # ПРОВЕРКА НАЛИЧИЯ ВСЕХ ОБЯЗАТЕЛЬНЫХ ПОЛЯХ
-        required_fields = ['shop', 'article', 'order_reason', 'quantity']
+        required_fields = ['shop', 'article', 'order_reason', 'quantity', 'department']
         for field in required_fields:
             if not data.get(field):
                 raise ValueError(f"Отсутствует обязательное поле: {field}")
-        # ПРОМЕЩАЕМ ВСЕ ОБНОВЛЕНИЯ В ОДИН ЗАПРОС
+
+        # Получаем лист отдела
+        department_sheet = orders_spreadsheet.worksheet(data['department'])
+        
+        # Рассчитываем next_row безопасным способом
+        try:
+            next_row = len(department_sheet.col_values(1)) + 1
+        except APIError as e:
+            logging.error(f"Ошибка Google Sheets: {str(e)}")
+            next_row = 1  # Начнем с первой строки если не удалось получить данные
+
+        # Формируем обновления
+        updates = [
+            {'range': f'A{next_row}', 'values': [[data['shop']]]},
+            {'range': f'B{next_row}', 'values': [[data['article']]]},
+            {'range': f'C{next_row}', 'values': [[data['order_reason']]]},
+            {'range': f'D{next_row}', 'values': [[datetime.now().strftime("%d.%m.%Y %H:%M")]]},
+            {'range': f'E{next_row}', 'values': [[f"{data['user_name']}, {data['user_position']}"]]},
+            {'range': f'K{next_row}', 'values': [[str(data['quantity'])]]},
+            {'range': f'R{next_row}', 'values': [[str(message.from_user.id)]]}
+        ]
+
+        # Записываем данные
         department_sheet.batch_update(updates)
         await message.answer("✅ Заказ успешно сохранен!", reply_markup=main_menu_keyboard())
         await state.clear()
+
     except Exception as e:
         await log_error(message.from_user.id, f"Save Error: {str(e)}")
-        await message.answer("⚠️ Ошибка сохранения заказа")
-
+        await message.answer(f"⚠️ Ошибка сохранения: {str(e)}")
 
 @dp.message(OrderStates.confirmation, F.text == "✏️ Исправить количество")
 async def correct_quantity(message: types.Message, state: FSMContext):
