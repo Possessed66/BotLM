@@ -531,9 +531,13 @@ async def final_confirmation(message: types.Message, state: FSMContext):
         # Логирование данных перед записью
         logging.info(f"Попытка записи в лист: {data['department']}")
         logging.info(f"Данные заказа: {data}")
-
+        
         # Получаем лист отдела
         department_sheet = orders_spreadsheet.worksheet(data['department'])
+         # Получаем номер следующей строки
+        next_row = len(department_sheet.col_values(1)) + 1  # Колонка A
+
+        
         # СОЗДАЁМ СПИСОК ОБНОВЛЕНИЙ
         updates = [
             {'range': f'A{next_row}', 'values': [[data['shop']]]},          # Магазин
