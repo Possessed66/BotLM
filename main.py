@@ -14,12 +14,14 @@ from google.oauth2.service_account import Credentials
 import gspread
 from gspread.exceptions import APIError, SpreadsheetNotFound
 from aiohttp import web
-import logging
 import asyncio
 from cachetools import cached, TTLCache
 import logging
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+)
 
 # ===================== КОНФИГУРАЦИЯ СЕРВИСНОГО РЕЖИМА =====================
 SERVICE_MODE = False
@@ -50,10 +52,11 @@ GAMMA_CLUSTER_SHEET = "Гамма кластер"
 LOGS_SHEET = "Логи"
 
 # Конфигурация для веб-хуков
+USE_WEBHOOKS = os.getenv('USE_WEBHOOKS', 'false').lower() == 'true'
 WEBHOOK_HOST = os.getenv('WEBHOOK_HOST')  # Например: https://your-bot.render.com
 WEBHOOK_PATH = "/webhook"  # Путь для веб-хука
 WEBHOOK_PORT = 8443
-WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+WEBHOOK_URL = f"{WEBHOOK_HOST}:{WEBHOOK_PORT}{WEBHOOK_PATH}" if USE_WEBHOOKS else None
 
 
 
@@ -685,8 +688,9 @@ async def shutdown():
 # ===================== ОБРАБОТЧИК ВЕБХУКОВ =====================
 async def handle_webhook(request):
     """Единый обработчик вебхуков"""
-    if USE_WEBHUOKS:
-        update = types.Update(**await request.json())
+    if USE_WEBHOOKS:
+        update_data = await request.json()
+        update = types.Update(**update_data)
         await dp.feed_update(bot=bot, update=update)
     return web.Response(text="OK", status=200)
 
@@ -699,10 +703,9 @@ app.on_shutdown.append(lambda _: shutdown())
 # ===================== УНИВЕРСАЛЬНЫЙ ЗАПУСК =====================
 async def main():
     """Главная функция запуска"""
-    await startup()  # Всегда запускаем инициализацию
+    await startup()
     
     if USE_WEBHOOKS:
-        # Настройка вебхуков
         await bot.set_webhook(
             url=WEBHOOK_URL,
             drop_pending_updates=True
@@ -711,32 +714,39 @@ async def main():
         await runner.setup()
         site = web.TCPSite(runner, '0.0.0.0', WEBHOOK_PORT)
         await site.start()
-        print(f"Bot is running on webhook mode: {WEBHOOK_URL}")
-        
-        # Бесконечное ожидание
+        print(f"✅ Bot is running in webhook mode: {WEBHOOK_URL}")
         while True:
             await asyncio.sleep(3600)
     else:
-        # Режим поллинга
-        print("Bot is running in polling mode")
+        print("✅ Bot is running in polling mode")
         await dp.start_polling(bot, skip_updates=True)
+
+# ===================== ЗАВЕРШЕНИЕ РАБОТЫ =====================
+async def shutdown():
+    """Корректное завершение работы"""
+    try:
+        if USE_WEBHOOKS:
+            await bot.delete_webhook()
+        await bot.session.close()
+        await dp.storage.close()
+    except Exception as e:
+        logging.error(f"Shutdown error: {str(e)}")
+    finally:
+        tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        for task in tasks:
+            task.cancel()
+        if loop.is_running():
+            loop.stop()
 
 if __name__ == "__main__":
     try:
-        # Инициализация новой event loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        
-        # Основной цикл
         loop.run_until_complete(main())
-        
     except KeyboardInterrupt:
-        print("\nBot stopped by user")
-        
+        print("\n🛑 Bot stopped by user")
     except Exception as e:
-        print(f"Critical error: {str(e)}")
-        
+        logging.critical(f"Critical error: {str(e)}")
     finally:
-        # Гарантированное завершение
         loop.run_until_complete(shutdown())
         loop.close()
