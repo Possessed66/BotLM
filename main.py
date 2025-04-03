@@ -1,7 +1,6 @@
 import os
 import json
-from cachetools import TTLCache
-from typing import Dict, Any
+from typing import Dict, Any, List
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.client.default import DefaultBotProperties
@@ -17,6 +16,7 @@ from gspread.exceptions import APIError, SpreadsheetNotFound
 from aiohttp import web
 import logging
 import asyncio
+from cachetools import cached, TTLCache
 
 
 # ===================== КОНФИГУРАЦИЯ СЕРВИСНОГО РЕЖИМА =====================
@@ -162,25 +162,22 @@ async def toggle_service_mode(enable: bool):
 
 
 # ===================== СИСТЕМА КЭШИРОВАНИЯ =====================
-async def cache_sheet_data(sheet, cache_key: str):
-    """Кэширование данных из листа"""
+@cached(cache)
+async def get_cached_data(sheet, cache_key: str) -> List[Dict]:
+    """Безопасное получение данных с кэшированием"""
     try:
-        data = sheet.get_all_records()
-        cache[cache_key] = data
-        print(f"📥 Загружено в кэш: {cache_key} ({len(data)} записей)")
+        print(f"🔍 Загрузка данных для ключа: {cache_key}")
+        records = sheet.get_all_records()
+        if not records:
+            print(f"⚠️ Таблица {cache_key} пуста!")
+            return []
+        return records
+    except gspread.exceptions.APIError as e:
+        print(f"🚨 Ошибка Google API: {e.response.text}")
+        return []
     except Exception as e:
-        print(f"⚠️ Ошибка загрузки {cache_key}: {str(e)}")
-
-async def cache_supplier_data(shop: str):
-    """Кэширование данных поставщиков для магазина"""
-    cache_key = f"supplier_{shop}"
-    try:
-        sheet = get_supplier_dates_sheet(shop)
-        data = sheet.get_all_records()
-        cache[cache_key] = data
-        print(f"📦 Загружено поставщиков для магазина {shop}: {len(data)}")
-    except Exception as e:
-        print(f"⚠️ Ошибка загрузки поставщиков для магазина {shop}: {str(e)}")
+        print(f"❌ Непредвиденная ошибка: {str(e)}")
+        return []
 
 async def preload_cache():
     """Предзагрузка данных при старте бота"""
@@ -578,16 +575,32 @@ async def handle_stock_check(message: types.Message):
 
 
 @dp.message(F.text == "/reload_cache")
-async def reload_cache_command(message: types.Message):
-    if message.from_user.id not in ADMINS:
-        return
-    
+async def reload_cache(message: types.Message):
     try:
-        await message.answer("🔄 Начинаю перезагрузку кэша...")
-        await preload_cache()
-        await message.answer("✅ Кэш успешно перезагружен")
+        # Принудительная очистка кэша
+        cache.clear()
+        
+        # Загрузка основных данных
+        users_data = await get_cached_data(users_sheet, "users")
+        gamma_data = await get_cached_data(gamma_cluster_sheet, "gamma_cluster")
+        
+        if not users_data or not gamma_data:
+            raise ValueError("Не удалось загрузить основные таблицы")
+        
+        # Дополнительная проверка данных
+        test_article = gamma_data[0].get("Артикул") if gamma_data else None
+        response = (
+            f"✅ Кэш перезагружен\n"
+            f"• Пользователей: {len(users_data)}\n"
+            f"• Товаров: {len(gamma_data)}\n"
+            f"• Тестовый артикул: {test_article or 'Нет данных'}"
+        )
+        
+        await message.answer(response)
     except Exception as e:
-        await message.answer(f"⚠️ Ошибка перезагрузки кэша: {str(e)}")
+        error_msg = f"Ошибка перезагрузки кэша: {str(e)}"
+        print(error_msg)
+        await message.answer(error_msg)
 
 
 # ===================== ОБРАБОТЧИК ВЕБХУКОВ =====================
