@@ -516,7 +516,7 @@ async def final_confirmation(message: types.Message, state: FSMContext):
                 raise TypeError(f"Некорректный тип {field}: {type(value)} вместо {field_type}")
 
         # Логирование данных перед записью
-        logging.info(f"Попытка записи в лист: {data['department']")
+        logging.info(f"Попытка записи в лист: {data['department']}")
         logging.info(f"Данные заказа: {data}")
 
         # Получаем лист отдела
