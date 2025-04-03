@@ -393,7 +393,8 @@ async def process_article(message: types.Message, state: FSMContext):
         print(f"🔍 Поиск артикула: {article}, магазин: {user_shop}")
         print(f"Кэш gamma_cluster: {len(cache.get('gamma_cluster', []))} записей")
         
-        # Ищем товар в кэше
+        gamma_data = cache.get("gamma_cluster", [])  # Добавьте эту строку
+
         product_data = next(
             (item for item in gamma_data
             if str(item.get("Артикул", "")).strip() == str(article).strip()
