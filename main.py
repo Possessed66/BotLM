@@ -163,21 +163,17 @@ async def toggle_service_mode(enable: bool):
 
 # ===================== СИСТЕМА КЭШИРОВАНИЯ =====================
 @cached(cache)
-async def get_cached_data(sheet, cache_key: str) -> List[Dict]:
-    """Безопасное получение данных с кэшированием"""
+async def cache_sheet_data(sheet, cache_key: str):
+    """Кэширование данных из листа"""
     try:
-        print(f"🔍 Загрузка данных для ключа: {cache_key}")
-        records = sheet.get_all_records()
-        if not records:
-            print(f"⚠️ Таблица {cache_key} пуста!")
-            return []
-        return records
-    except gspread.exceptions.APIError as e:
-        print(f"🚨 Ошибка Google API: {e.response.text}")
-        return []
+        print(f"⌛ Начало загрузки кэша для ключа: {cache_key}")
+        data = sheet.get_all_records()
+        print(f"✅ Данные из Google Sheets ({cache_key}): {data[:1]}...")  # Первая запись для примера
+        cache[cache_key] = data
+        print(f"📥 Успешно загружено в кэш: {cache_key} ({len(data)} записей)")
     except Exception as e:
-        print(f"❌ Непредвиденная ошибка: {str(e)}")
-        return []
+        print(f"🔥 Ошибка загрузки {cache_key}: {str(e)}")
+        raise
 
 async def preload_cache():
     """Предзагрузка данных при старте бота"""
@@ -378,18 +374,19 @@ async def process_article(message: types.Message, state: FSMContext):
     user_shop = data['shop']
     
     try:
-        # Используем кэшированные данные gamma_cluster
-        gamma_data = cache.get("gamma_cluster", [])
+        print(f"🔍 Поиск артикула: {article}, магазин: {user_shop}")
+        print(f"Кэш gamma_cluster: {len(cache.get('gamma_cluster', []))} записей")
         
         # Ищем товар в кэше
         product_data = next(
-            (item for item in gamma_data 
-             if str(item.get("Артикул")) == article 
-             and str(item.get("Магазин")) == user_shop),
+            (item for item in cache.get("gamma_cluster", [])
+             if str(item.get("Артикул", "")).strip() == str(article).strip()
+             and str(item.get("Магазин", "")).strip() == str(user_shop).strip()),
             None
         )
         
         if not product_data:
+            print(f"❌ Артикул {article} не найден в магазине {user_shop}")
             await message.answer("❌ Товар не найден.")
             return
 
@@ -623,6 +620,16 @@ async def debug_article(message: types.Message):
     except Exception as e:
         await message.answer(f"⚠️ Ошибка: {str(e)}")
 
+
+
+@dp.message(F.text == "/check_cache")
+async def check_cache(message: types.Message):
+    gamma_data = cache.get("gamma_cluster", [])
+    response = (
+        f"Кэш gamma_cluster: {len(gamma_data)} записей\n"
+        f"Пример: {gamma_data[:1] if gamma_data else 'Нет данных'}"
+    )
+    await message.answer(response)
 # ===================== ОБРАБОТЧИК ВЕБХУКОВ =====================
 async def on_startup(app):
     await bot.set_webhook(WEBHOOK_URL)
