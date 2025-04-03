@@ -56,13 +56,12 @@ LOGS_SHEET = "Логи"
 USE_WEBHOOKS = os.getenv('USE_WEBHOOKS', 'false').lower() == 'true'
 
 # Добавить проверку для вебхук-режима
-if USE_WEBHOOKS and not WEBHOOK_HOST.startswith("https://"):
-    raise ValueError("WEBHOOK_HOST must be HTTPS URL in webhook mode")
 WEBHOOK_HOST = os.getenv('WEBHOOK_HOST')  # Например: https://your-bot.render.com
 WEBHOOK_PATH = "/webhook"  # Путь для веб-хука
 WEBHOOK_PORT = 8443
 WEBHOOK_URL = f"{WEBHOOK_HOST}:{WEBHOOK_PORT}{WEBHOOK_PATH}" if USE_WEBHOOKS else None
-
+if USE_WEBHOOKS and not WEBHOOK_HOST.startswith("https://"):
+    raise ValueError("WEBHOOK_HOST must be HTTPS URL in webhook mode")
 
 
 # ===================== ИНИЦИАЛИЗАЦИЯ =====================
