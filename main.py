@@ -662,9 +662,20 @@ async def shutdown():
     """Общая логика завершения работы"""
     shutdown_msg = "🔴 Бот остановлен"
     print(shutdown_msg)
-    await notify_admins(shutdown_msg)
+    
+    # Отправка уведомлений ДО закрытия сессий
+    try:
+        await notify_admins(shutdown_msg)
+    except Exception as e:
+        print(f"Ошибка отправки уведомления: {str(e)}")
+
+    # Закрытие сессий
     if USE_WEBHOOKS:
         await bot.delete_webhook()
+    
+    # Явное закрытие клиента aiohttp
+    await bot.session.close()
+    await dp.storage.close()
 
 
 
@@ -709,8 +720,14 @@ async def main():
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(main())
     except KeyboardInterrupt:
-        print("Bot stopped by user")
+        print("\nBot stopped by user")
     finally:
-        asyncio.run(shutdown())
+        # Явное закрытие всех асинхронных задач
+        tasks = asyncio.all_tasks(loop)
+        for task in tasks:
+            task.cancel()
+        loop.close()
