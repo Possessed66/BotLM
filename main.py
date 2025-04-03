@@ -603,6 +603,26 @@ async def reload_cache(message: types.Message):
         await message.answer(error_msg)
 
 
+
+@dp.message(F.text == "/debug_article")
+async def debug_article(message: types.Message):
+    try:
+        gamma_data = cache.get("gamma_cluster", [])
+        if not gamma_data:
+            await message.answer("❌ Кэш товаров пуст")
+            return
+            
+        sample_item = gamma_data[0]
+        debug_info = (
+            f"🔍 Пример элемента из кэша:\n"
+            f"Тип артикула: {type(sample_item.get('Артикул'))}\n"
+            f"Значение: {sample_item.get('Артикул')}\n"
+            f"Все ключи: {list(sample_item.keys())}"
+        )
+        await message.answer(debug_info)
+    except Exception as e:
+        await message.answer(f"⚠️ Ошибка: {str(e)}")
+
 # ===================== ОБРАБОТЧИК ВЕБХУКОВ =====================
 async def on_startup(app):
     await bot.set_webhook(WEBHOOK_URL)
