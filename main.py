@@ -431,7 +431,7 @@ async def process_article(message: types.Message, state: FSMContext):
         await state.update_data(
             article=article,
             product_name=product_data.get('Название', ''),
-            department=product_data.get('Отдел', ''),
+            department=str(product_data.get('Отдел', '')),
             order_date=order_date,
             delivery_date=delivery_date,
             supplier_id=supplier_id
@@ -495,6 +495,7 @@ async def process_order_reason(message: types.Message, state: FSMContext):
     await state.update_data(order_reason=order_reason)
     # Вывод информации для подтверждения
     await message.answer(
+        f"Магазин: {user_shop}\n"
         f"📦 Артикул: {data['article']}\n"
         f"🏷️ Название: {data['product_name']}\n"
         f"📅 Дата заказа: {data['order_date']}\n"
