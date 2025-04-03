@@ -190,22 +190,23 @@ async def cache_supplier_data(shop: str):
 
 
 
-async def preload_cache():
+async def preload_cache(_=None):  # Добавляем неиспользуемый параметр
     """Предзагрузка данных при старте бота"""
-    print("♻️ Начало предзагрузки кэша...")
-    
     try:
-        # Кэшируем основные данные
+        print("♻️ Начало предзагрузки кэша...")
+        
+        # Основная загрузка данных
         await cache_sheet_data(users_sheet, "users")
         await cache_sheet_data(gamma_cluster_sheet, "gamma_cluster")
         
-        # Кэшируем данные по магазинам
-        shops = users_sheet.col_values(5)[1:]
+        # Загрузка данных поставщиков
+        shops = users_sheet.col_values(5)[1:]  # Колонка E
         for shop in set(shops):
             await cache_supplier_data(shop)
-        
+            
         print(f"✅ Кэш загружен. Всего элементов: {len(cache)}")
         validate_cache_keys()
+    
     except Exception as e:
         print(f"⚠️ Ошибка загрузки кэша: {str(e)}")
         raise
@@ -646,53 +647,66 @@ async def check_cache(message: types.Message):
     )
     await message.answer(response)
 # ===================== ОБРАБОТЧИК ВЕБХУКОВ =====================
-async def on_startup(app):
-    await bot.set_webhook(WEBHOOK_URL)
-    startup_msg = "🟢 Бот запущен"
-    print(startup_msg)
-    print(f"Кэш после загрузки: {list(cache.keys())}")
-    await notify_admins(startup_msg)
+#async def on_startup(app):
+   # await bot.set_webhook(WEBHOOK_URL)
+   # startup_msg = "🟢 Бот запущен"
+   # print(startup_msg)
+   # print(f"Кэш после загрузки: {list(cache.keys())}")
+   # await notify_admins(startup_msg)
     
-    try:
-        await preload_cache()
-    except Exception as e:
-        await notify_admins(f"🚨 Критическая ошибка запуска: {str(e)}")
-        raise
+   # try:
+   #     await preload_cache()
+   # except Exception as e:
+   #     await notify_admins(f"🚨 Критическая ошибка запуска: {str(e)}")
+   #     raise
 
-async def on_shutdown(app):
-    shutdown_msg = "🔴 Бот остановлен"
-    print(shutdown_msg)
-    await notify_admins(shutdown_msg)
-    await bot.delete_webhook()
+#async def on_shutdown(app):
+  #  shutdown_msg = "🔴 Бот остановлен"
+# print(shutdown_msg)
+ #   await notify_admins(shutdown_msg)
+  #  await bot.delete_webhook()
 
 
-async def handle_webhook(request):
-    update = types.Update(**await request.json())
-    await dp.feed_update(bot=bot, update=update)
-    return web.Response(text="Ok", status=200)
+#async def handle_webhook(request):
+ #   update = types.Update(**await request.json())
+  #  await dp.feed_update(bot=bot, update=update)
+   # return web.Response(text="Ok", status=200)
 
 
 # ИНИЦИАЛИЗАЦИЯ АППЛИКАЦИИ ОДИН РАЗ
-app = web.Application()
-app.router.add_post(WEBHOOK_PATH, handle_webhook)
-app.on_startup.append(on_startup)
-app.on_shutdown.append(on_shutdown)
+#app = web.Application()
+#app.router.add_post(WEBHOOK_PATH, handle_webhook)
+#app.on_startup.append(on_startup)
+#app.on_shutdown.append(on_shutdown)
 
 
-@dp.message(lambda message: 'order_update' in message.text)
-async def send_order_notification(message: types.Message):
+#@dp.message(lambda message: 'order_update' in message.text)
+#async def send_order_notification(message: types.Message):
+ #   try:
+ #       data = message.text.split('\n')
+ #       chat_id = data[1]
+ #       order_info = '\n'.join(data[2:])
+ #       await bot.send_message(chat_id=chat_id, text=order_info, parse_mode=ParseMode.HTML)
+  #  except Exception as e:
+  #      logging.error(f"Ошибка отправки уведомления: {str(e)}")
+
+
+async def main():
+    # Закомментируйте вебхуки, если они не используются
+    # await bot.delete_webhook()  # На всякий случай
+    
+    # Предзагрузка кэша перед стартом
     try:
-        data = message.text.split('\n')
-        chat_id = data[1]
-        order_info = '\n'.join(data[2:])
-        await bot.send_message(chat_id=chat_id, text=order_info, parse_mode=ParseMode.HTML)
+        print("🔄 Начало загрузки кэша...")
+        await preload_cache()
+        print("✅ Кэш успешно загружен")
     except Exception as e:
-        logging.error(f"Ошибка отправки уведомления: {str(e)}")
-
+        print(f"🚨 Критическая ошибка загрузки кэша: {str(e)}")
+        exit(1)
+    
+    # Запуск поллинга
+    await dp.start_polling(bot, skip_updates=True)
 
 if __name__ == "__main__":
-    async def main():
-        await dp.start_polling(bot, skip_updates=True)
-
-    import asyncio
+  
     asyncio.run(main())
