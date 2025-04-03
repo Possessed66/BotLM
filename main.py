@@ -162,7 +162,6 @@ async def toggle_service_mode(enable: bool):
 
 
 # ===================== СИСТЕМА КЭШИРОВАНИЯ =====================
-@cached(cache)
 async def cache_sheet_data(sheet, cache_key: str):
     """Кэширование данных из листа"""
     try:
@@ -174,6 +173,22 @@ async def cache_sheet_data(sheet, cache_key: str):
     except Exception as e:
         print(f"🔥 Ошибка загрузки {cache_key}: {str(e)}")
         raise
+
+
+
+async def cache_supplier_data(shop: str):
+    """Кэширование данных поставщиков для магазина"""
+    cache_key = f"supplier_{shop}"
+    try:
+        sheet = get_supplier_dates_sheet(shop)
+        data = sheet.get_all_records()
+        cache[cache_key] = data
+        print(f"📦 Загружено поставщиков для магазина {shop}: {len(data)}")
+    except Exception as e:
+        print(f"⚠️ Ошибка загрузки поставщиков для магазина {shop}: {str(e)}")
+
+
+
 
 async def preload_cache():
     """Предзагрузка данных при старте бота"""
@@ -369,6 +384,10 @@ async def handle_client_order(message: types.Message, state: FSMContext):
 
 @dp.message(OrderStates.article_input)
 async def process_article(message: types.Message, state: FSMContext):
+    gamma_data = cache.get("gamma_cluster", [])
+if not gamma_data:
+    await message.answer("❌ Кэш товаров не загружен")
+    return
     article = message.text.strip()
     data = await state.get_data()
     user_shop = data['shop']
@@ -379,9 +398,9 @@ async def process_article(message: types.Message, state: FSMContext):
         
         # Ищем товар в кэше
         product_data = next(
-            (item for item in cache.get("gamma_cluster", [])
-             if str(item.get("Артикул", "")).strip() == str(article).strip()
-             and str(item.get("Магазин", "")).strip() == str(user_shop).strip()),
+            (item for item in gamma_data
+            if str(item.get("Артикул", "")).strip() == str(article).strip()
+            and str(item.get("Магазин", "")).strip() == str(user_shop).strip()),
             None
         )
         
@@ -635,6 +654,7 @@ async def on_startup(app):
     await bot.set_webhook(WEBHOOK_URL)
     startup_msg = "🟢 Бот запущен"
     print(startup_msg)
+    print(f"Кэш после загрузки: {list(cache.keys())}")
     await notify_admins(startup_msg)
     
     try:
