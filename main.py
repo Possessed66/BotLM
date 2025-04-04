@@ -456,8 +456,8 @@ async def process_article(message: types.Message, state: FSMContext):
             except StopIteration:
                 gamma_item = None
     except Exception as e:
-    await log_error(message.from_user.id, f"Order Article Error: {str(e)}")
-    await message.answer("⚠️ Произошла ошибка при обработке артикула")
+        await log_error(message.from_user.id, f"Order Article Error: {str(e)}")
+        await message.answer("⚠️ Произошла ошибка при обработке артикула")
         
 
 
