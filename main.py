@@ -492,7 +492,7 @@ async def process_article(message: types.Message, state: FSMContext):
         department=product_info['department'],
         order_date=product_info['order_date'],
         delivery_date=product_info['delivery_date'],
-        supplier_id=product_info['supplier_id']
+        supplier_id=product_info['supplier_id'],
         supplier_name=product_info['supplier_name']
     )
     
