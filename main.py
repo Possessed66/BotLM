@@ -428,7 +428,7 @@ async def process_article(message: types.Message, state: FSMContext):
             return
 
         # Получаем данные поставщика из кэша
-supplier_id = str(product_data.get("Номер осн. пост.", "")).strip()
+        supplier_id = str(product_data.get("Номер осн. пост.", "")).strip()
         supplier_sheet = get_supplier_dates_sheet(user_shop)
         
         # Исправленный блок
@@ -458,6 +458,9 @@ supplier_id = str(product_data.get("Номер осн. пост.", "")).strip()
     except Exception as e:
     await log_error(message.from_user.id, f"Order Article Error: {str(e)}")
     await message.answer("⚠️ Произошла ошибка при обработке артикула")
+        
+
+
         # Определяем название поставщика
         supplier_name = "Неизвестный поставщик"
         if supplier_data:
