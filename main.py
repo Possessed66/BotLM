@@ -428,30 +428,40 @@ async def process_article(message: types.Message, state: FSMContext):
             return
 
         # Получаем данные поставщика из кэша
-        supplier_id = str(product_data.get("Номер осн. пост.", "")).strip()
+supplier_id = str(product_data.get("Номер осн. пост.", "")).strip()
         supplier_sheet = get_supplier_dates_sheet(user_shop)
-
-        supplier_name = "Неизвестный поставщик"
-        gamma_item = None  # Явная инициализация
-        # Ищем поставщика в кэшированных данных
-        supplier_data = next(
-            (item for item in supplier_sheet.data 
-             if str(item.get("Номер осн. пост.", "")).strip() == supplier_id),
-            None
-        )
         
-        if not supplier_data:
-            raise ValueError("Поставщик не найден")
+        # Исправленный блок
+        supplier_data = None
+        gamma_item = None  # Явная инициализация
 
-        # Получаем название поставщика (столбец B в листе поставщиков)
-        supplier_name = supplier_data.get("Название осн. пост.", "")  # Проверьте точное название столбца!
-        if not supplier_name:
-            gamma_item = next(
-            (item for item in gamma_data 
-             if str(item.get("Номер осн. пост.", "")).strip() == supplier_id),
-            None
+        # Поиск в данных поставщика
+        try:
+            supplier_data = next(
+                (item for item in supplier_sheet.data 
+                 if str(item.get("Номер осн. пост.", "")).strip() == supplier_id),
+                None
             )
-        supplier_name = gamma_item.get("Поставщик", "") if gamma_item else "Неизвестный поставщик"
+        except StopIteration:
+            pass
+
+        # Если не найдено, ищем в Gamma Cluster
+        if not supplier_data:
+            try:
+                gamma_item = next(
+                    (item for item in gamma_data 
+                     if str(item.get("Номер осн. пост.", "")).strip() == supplier_id),
+                    None
+                )
+            except StopIteration:
+                gamma_item = None
+
+        # Определяем название поставщика
+        supplier_name = "Неизвестный поставщик"
+        if supplier_data:
+            supplier_name = supplier_data.get("Название поставщика", supplier_name)
+        elif gamma_item:
+            supplier_name = gamma_item.get("Поставщик", supplier_name)
         # Парсим данные поставщика
         parsed_supplier = parse_supplier_data(supplier_data)
         
