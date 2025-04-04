@@ -539,7 +539,7 @@ async def process_order_reason(message: types.Message, state: FSMContext):
         f"Магазин: {user_shop}\n"
         f"📦 Артикул: {data['article']}\n"
         f"🏷️ Название: {data['product_name']}\n"
-        f"🏭 Поставщик: {product_info['supplier_name']}\n" 
+        f"🏭 Поставщик: {data['supplier_name']}\n" 
         f"📅 Дата заказа: {data['order_date']}\n"
         f"🚚 Дата поставки: {data['delivery_date']}\n"
         f"Количество: {data['quantity']}\n"
