@@ -420,7 +420,9 @@ async def process_article(message: types.Message, state: FSMContext):
         # Получаем данные поставщика из кэша
         supplier_id = str(product_data.get("Номер осн. пост.", "")).strip()
         supplier_sheet = get_supplier_dates_sheet(user_shop)
-        
+
+        supplier_name = "Неизвестный поставщик"
+        gamma_item = None  # Явная инициализация
         # Ищем поставщика в кэшированных данных
         supplier_data = next(
             (item for item in supplier_sheet.data 
@@ -595,6 +597,77 @@ async def cancel_order_process(message: types.Message, state: FSMContext):
 @dp.message(F.text == "📋 Запрос информации")
 async def handle_info_request(message: types.Message):
     await message.answer("🛠️ Функция в разработке")
+
+
+
+@dp.message(InfoStates.article_input)
+async def process_info_article(message: types.Message, state: FSMContext):
+    article = message.text.strip()
+    data = await state.get_data()
+    user_shop = data['shop']
+    
+    try:
+        gamma_data = cache.get("gamma_cluster", [])
+        
+        # Ищем первый подходящий товар
+        product_data = next(
+            (item for item in gamma_data
+             if str(item.get("Артикул", "")).strip() == article
+             and str(item.get("Магазин", "")).strip() == user_shop),
+            None
+        )
+        
+        if not product_data:
+            await message.answer("❌ Товар не найден.", reply_markup=info_keyboard())
+            return
+
+        supplier_id = str(product_data.get("Номер осн. пост.", "")).strip()
+        supplier_sheet = get_supplier_dates_sheet(user_shop)
+        
+        supplier_data = None
+        gamma_item = None
+        
+        
+        supplier_data = next(
+            (item for item in supplier_sheet.data 
+             if str(item.get("Номер осн. пост.", "")).strip() == supplier_id),
+            None
+        )
+        
+        # Получаем название поставщика
+        supplier_name = "Неизвестный поставщик"
+        if supplier_data:
+            supplier_name = supplier_data.get('Название осн. пост.', "Неизвестный поставщик")
+        else:
+            # Дополнительная проверка в Gamma Cluster
+            gamma_item = next(
+            (item for item in gamma_data 
+            if str(item.get("Номер осн. пост.", "")).strip() == supplier_id),  # Фикс синтаксиса
+            None
+            )
+            if gamma_item:
+                supplier_name = gamma_item.get("Поставщик", "Неизвестный поставщик")
+
+        # Рассчет дат
+        order_date, delivery_date = calculate_delivery_date(parse_supplier_data(supplier_data)) if supplier_data else ("N/A", "N/A")
+
+        response = (
+            f"🏪 Магазин: {user_shop}\n"
+            f"📦 Артикул: {article}\n"
+            f"🏷️ Название: {product_data.get('Название', '')}\n"
+            f"🏭 Поставщик: {supplier_name}\n"
+            f"📅 Дата заказа: {order_date}\n"
+            f"🚚 Дата доставки: {delivery_date}"
+        )
+        
+        await message.answer(response, reply_markup=info_keyboard())
+
+    except Exception as e:
+        await log_error(message.from_user.id, f"Info Error: {str(e)}")
+        await message.answer("⚠️ Ошибка получения информации", reply_markup=info_keyboard())
+
+
+
 
 
 @dp.message(F.text == "📦 Проверка стока")
