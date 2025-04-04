@@ -455,7 +455,9 @@ supplier_id = str(product_data.get("Номер осн. пост.", "")).strip()
                 )
             except StopIteration:
                 gamma_item = None
-
+    except Exception as e:
+    await log_error(message.from_user.id, f"Order Article Error: {str(e)}")
+    await message.answer("⚠️ Произошла ошибка при обработке артикула")
         # Определяем название поставщика
         supplier_name = "Неизвестный поставщик"
         if supplier_data:
