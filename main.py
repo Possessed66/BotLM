@@ -102,6 +102,9 @@ class OrderStates(StatesGroup):
     confirmation = State()
     order_reason_input = State()
 
+class InfoStates(StatesGroup):
+    article_input = State()
+
 
 # ===================== ВСПОМОГАТЕЛЬНЫЙ КЛАСС =====================
 class FakeSheet:
@@ -144,6 +147,13 @@ def confirm_keyboard():
     builder.button(text="✏️ Исправить количество")
     builder.button(text="❌ Отмена")
     builder.adjust(2, 1)
+    return builder.as_markup(resize_keyboard=True)
+
+def info_keyboard():
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="🔍 Следующий артикул")
+    builder.button(text="📋 Главное меню")
+    builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
 
 
@@ -595,8 +605,22 @@ async def cancel_order_process(message: types.Message, state: FSMContext):
 
 
 @dp.message(F.text == "📋 Запрос информации")
-async def handle_info_request(message: types.Message):
-    await message.answer("🛠️ Функция в разработке")
+async def handle_info_request(message: types.Message, state: FSMContext):
+    user_data = await get_user_data(str(message.from_user.id))
+    if not user_data:
+        await message.answer("❌ Сначала пройдите регистрацию через /start")
+        return
+    
+    await state.update_data(shop=user_data['shop'])
+    await message.answer("🔢 Введите артикул товара:", reply_markup=info_keyboard())
+    await state.set_state(InfoStates.article_input)
+
+@dp.message(InfoStates.article_input, F.text == "🔍 Следующий артикул")
+async def next_article(message: types.Message, state: FSMContext):
+    await message.answer("🔢 Введите новый артикул товара:", reply_markup=info_keyboard())
+    await state.set_state(InfoStates.article_input)
+
+
 
 
 
