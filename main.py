@@ -88,6 +88,7 @@ except Exception as e:
     print(f"Ошибка инициализации: {str(e)}")
     exit()
 
+
 # ===================== СОСТОЯНИЯ FSM =====================
 class Registration(StatesGroup):
     name = State()
@@ -101,6 +102,10 @@ class OrderStates(StatesGroup):
     quantity_input = State()
     confirmation = State()
     order_reason_input = State()
+
+
+class InfoRequest(StatesGroup):
+    article_input = State()
 
 
 # ===================== ВСПОМОГАТЕЛЬНЫЙ КЛАСС =====================
@@ -122,6 +127,7 @@ class FakeSheet:
     def get_all_records(self):
         return self.data
 
+
 # ===================== КЛАВИАТУРЫ =====================
 def main_menu_keyboard():
     builder = ReplyKeyboardBuilder()
@@ -129,6 +135,14 @@ def main_menu_keyboard():
     builder.button(text="📦 Проверка стока")
     builder.button(text="🛒 Заказ под клиента")
     builder.adjust(2, 1)
+    return builder.as_markup(resize_keyboard=True)
+
+
+def article_input_keyboard():
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="❌ Отмена")
+    builder.button(text="↩️ Назад")
+    builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
 
 
@@ -322,6 +336,51 @@ def calculate_delivery_date(supplier_data: dict) -> tuple:
     )
 
 
+# ========================== ПАРСЕР ===========================
+async def get_product_info(article: str, user_shop: str) -> dict:
+    """Получение информации о товаре по артикулу"""
+    try:
+        gamma_data = cache.get("gamma_cluster", [])
+        product_data = next(
+            (item for item in gamma_data
+             if str(item.get("Артикул", "")).strip() == str(article).strip()
+             and str(item.get("Магазин", "")).strip() == str(user_shop).strip()),
+            None
+        )
+        
+        if not product_data:
+            return None
+
+        supplier_id = str(product_data.get("Номер осн. пост.", "")).strip()
+        supplier_sheet = get_supplier_dates_sheet(user_shop)
+        supplier_data = next(
+            (item for item in supplier_sheet.data 
+             if str(item.get("Номер осн. пост.", "")).strip() == supplier_id),
+            None
+        )
+        
+        if not supplier_data:
+            return None
+
+        parsed_supplier = parse_supplier_data(supplier_data)
+        order_date, delivery_date = calculate_delivery_date(parsed_supplier)
+
+        return {
+            'article': article,
+            'product_name': product_data.get('Название', ''),
+            'department': str(product_data.get('Отдел', '')),
+            'order_date': order_date,
+            'delivery_date': delivery_date,
+            'supplier_id': supplier_id,
+            'shop': user_shop,
+            'parsed_supplier': parsed_supplier
+        }
+        
+    except Exception as e:
+        logging.error(f"Product info error: {str(e)}")
+        return None
+
+
 # ===================== ОБРАБОТЧИКИ КОМАНД =====================
 @dp.message(F.text == "/start")
 async def start_handler(message: types.Message, state: FSMContext):
@@ -384,12 +443,13 @@ async def handle_client_order(message: types.Message, state: FSMContext):
     if not user_data:
         await message.answer("❌ Сначала пройдите регистрацию через /start")
         return
+        
     await state.update_data(
         shop=user_data['shop'],
         user_name=user_data['name'],
         user_position=user_data['position']
     )
-    await message.answer("🔢 Введите артикул товара:", reply_markup=types.ReplyKeyboardRemove())
+    await message.answer("🔢 Введите артикул товара:", reply_markup=article_input_keyboard())
     await state.set_state(OrderStates.article_input)
 
 
@@ -399,76 +459,31 @@ async def process_article(message: types.Message, state: FSMContext):
     data = await state.get_data()
     user_shop = data['shop']
     
-    try:
-        print(f"🔍 Поиск артикула: {article}, магазин: {user_shop}")
-        print(f"Кэш gamma_cluster: {len(cache.get('gamma_cluster', []))} записей")
-        
-        gamma_data = cache.get("gamma_cluster", [])  # Добавьте эту строку
+    product_info = await get_product_info(article, user_shop)
+    if not product_info:
+        await message.answer("❌ Товар не найден")
+        return
 
-        product_data = next(
-            (item for item in gamma_data
-            if str(item.get("Артикул", "")).strip() == str(article).strip()
-            and str(item.get("Магазин", "")).strip() == str(user_shop).strip()),
-            None
-        )
-        
-        if not product_data:
-            print(f"❌ Артикул {article} не найден в магазине {user_shop}")
-            await message.answer("❌ Товар не найден.")
-            return
-
-        # Получаем данные поставщика из кэша
-        supplier_id = str(product_data.get("Номер осн. пост.", "")).strip()
-        supplier_sheet = get_supplier_dates_sheet(user_shop)
-        
-        # Ищем поставщика в кэшированных данных
-        supplier_data = next(
-            (item for item in supplier_sheet.data 
-             if str(item.get("Номер осн. пост.", "")).strip() == supplier_id),
-            None
-        )
-        
-        if not supplier_data:
-            raise ValueError("Поставщик не найден")
-
-        # Парсим данные поставщика
-        parsed_supplier = parse_supplier_data(supplier_data)
-        
-        # Рассчитываем даты
-        order_date, delivery_date = calculate_delivery_date(parsed_supplier)
-        
-        # Обновляем состояние
-        await state.update_data(
-            article=article,
-            product_name=product_data.get('Название', ''),
-            department=str(product_data.get('Отдел', '')),
-            order_date=order_date,
-            delivery_date=delivery_date,
-            supplier_id=supplier_id
-        )
-
-        # Формируем ответ
-        response = (
-            f"Магазин: {user_shop}\n"
-            f"📦 Артикул: {article}\n"
-            f"🏷️ Название: {product_data.get('Название', '')}\n"
-            f"📅 Дата заказа: {order_date}\n"
-            f"🚚 Дата поставки: {delivery_date}\n"
-        )
-        
-        await message.answer(response)
-        await message.answer("🔢 Введите количество товара:")
-        await state.set_state(OrderStates.quantity_input)
-
-    except StopIteration:
-        await message.answer("❌ Товар не найден в системе")
-    except ValueError as ve:
-        await log_error(message.from_user.id, f"Value Error: {str(ve)}")
-        await message.answer(f"⚠️ Ошибка: {str(ve)}")
-    except Exception as e:
-        await log_error(message.from_user.id, f"Unexpected error: {str(e)}")
-        await message.answer("⚠️ Произошла непредвиденная ошибка")
-
+    response = (
+        f"Магазин: {user_shop}\n"
+        f"📦 Артикул: {product_info['article']}\n"
+        f"🏷️ Название: {product_info['product_name']}\n"
+        f"📅 Дата заказа: {product_info['order_date']}\n"
+        f"🚚 Дата поставки: {product_info['delivery_date']}\n"
+    )
+    
+    await state.update_data(
+        article=product_info['article'],
+        product_name=product_info['product_name'],
+        department=product_info['department'],
+        order_date=product_info['order_date'],
+        delivery_date=product_info['delivery_date'],
+        supplier_id=product_info['supplier_id']
+    )
+    
+    await message.answer(response)
+    await message.answer("🔢 Введите количество товара:")
+    await state.set_state(OrderStates.quantity_input)
 
 def parse_supplier_data(record):
     order_days = []
@@ -581,8 +596,42 @@ async def cancel_order_process(message: types.Message, state: FSMContext):
 
 
 @dp.message(F.text == "📋 Запрос информации")
-async def handle_info_request(message: types.Message):
-    await message.answer("🛠️ Функция в разработке")
+async def handle_info_request(message: types.Message, state: FSMContext):
+    user_data = await get_user_data(str(message.from_user.id))
+    if not user_data:
+        await message.answer("❌ Сначала пройдите регистрацию через /start")
+        return
+        
+    await state.update_data(shop=user_data['shop'])
+    await message.answer("🔢 Введите артикул товара:", reply_markup=article_input_keyboard())
+    await state.set_state(InfoRequest.article_input)
+
+
+@dp.message(InfoRequest.article_input)
+async def process_info_request(message: types.Message, state: FSMContext):
+    article = message.text.strip()
+    data = await state.get_data()
+    user_shop = data['shop']
+    
+    product_info = await get_product_info(article, user_shop)
+    if not product_info:
+        await message.answer("❌ Товар не найден")
+        await state.clear()
+        return
+
+    response = (
+        f"🔍 Информация о товаре:\n"
+        f"Магазин: {user_shop}\n"
+        f"Артикул: {product_info['article']}\n"
+        f"Название: {product_info['product_name']}\n"
+        f"Отдел: {product_info['department']}\n"
+        f"Ближайшая дата заказа: {product_info['order_date']}\n"
+        f"Ожидаемая дата поставки: {product_info['delivery_date']}\n"
+        f"Поставщик: {product_info['supplier_id']}"
+    )
+    
+    await message.answer(response, reply_markup=main_menu_keyboard())
+    await state.clear()
 
 
 @dp.message(F.text == "📦 Проверка стока")
