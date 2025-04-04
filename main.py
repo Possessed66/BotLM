@@ -102,9 +102,6 @@ class OrderStates(StatesGroup):
     confirmation = State()
     order_reason_input = State()
 
-class InfoStates(StatesGroup):
-    article_input = State()
-
 
 # ===================== ВСПОМОГАТЕЛЬНЫЙ КЛАСС =====================
 class FakeSheet:
@@ -147,13 +144,6 @@ def confirm_keyboard():
     builder.button(text="✏️ Исправить количество")
     builder.button(text="❌ Отмена")
     builder.adjust(2, 1)
-    return builder.as_markup(resize_keyboard=True)
-
-def info_keyboard():
-    builder = ReplyKeyboardBuilder()
-    builder.button(text="🔍 Следующий артикул")
-    builder.button(text="📋 Главное меню")
-    builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
 
 
@@ -309,34 +299,6 @@ def get_supplier_dates_sheet(shop_number: str):
     return FakeSheet(data)
 
 
-def get_supplier_info(supplier_id: str, user_shop: str) -> tuple:
-    """Новая функция для получения данных поставщика"""
-    supplier_sheet = get_supplier_dates_sheet(user_shop)
-    
-    # Поиск в данных поставщика
-    supplier_data = next(
-        (item for item in supplier_sheet.data 
-         if str(item.get("Номер осн. пост.", "")).strip() == supplier_id),
-        None
-    )
-    
-    supplier_name = "Неизвестный поставщик"
-    if supplier_data:
-        supplier_name = supplier_data.get("Название осн. пост.", supplier_name)
-    else:
-        # Поиск в Gamma Cluster
-        gamma_data = cache.get("gamma_cluster", [])
-        gamma_item = next(
-            (item for item in gamma_data 
-             if str(item.get("Номер осн. пост.", "")).strip() == supplier_id),
-            None
-        )
-        if gamma_item:
-            supplier_name = gamma_item.get("Поставщик", supplier_name)
-    
-    return supplier_data, supplier_name
-
-
 def calculate_delivery_date(supplier_data: dict) -> tuple:
     today = datetime.now()
     current_weekday = today.isoweekday()
@@ -459,42 +421,16 @@ async def process_article(message: types.Message, state: FSMContext):
         supplier_id = str(product_data.get("Номер осн. пост.", "")).strip()
         supplier_sheet = get_supplier_dates_sheet(user_shop)
         
-        # Исправленный блок
-        supplier_data = None
-        gamma_item = None  # Явная инициализация
-
-        # Поиск в данных поставщика
-        try:
-            supplier_data = next(
-                (item for item in supplier_sheet.data 
-                 if str(item.get("Номер осн. пост.", "")).strip() == supplier_id),
-                None
-            )
-        except StopIteration:
-            pass
-
-        # Если не найдено, ищем в Gamma Cluster
-        if not supplier_data:
-            try:
-                gamma_item = next(
-                    (item for item in gamma_data 
-                     if str(item.get("Номер осн. пост.", "")).strip() == supplier_id),
-                    None
-                )
-            except StopIteration:
-                gamma_item = None
-    except Exception as e:
-        await log_error(message.from_user.id, f"Order Article Error: {str(e)}")
-        await message.answer("⚠️ Произошла ошибка при обработке артикула")
+        # Ищем поставщика в кэшированных данных
+        supplier_data = next(
+            (item for item in supplier_sheet.data 
+             if str(item.get("Номер осн. пост.", "")).strip() == supplier_id),
+            None
+        )
         
+        if not supplier_data:
+            raise ValueError("Поставщик не найден")
 
-
-        # Определяем название поставщика
-        supplier_name = "Неизвестный поставщик"
-        if supplier_data:
-            supplier_name = supplier_data.get("Название поставщика", supplier_name)
-        elif gamma_item:
-            supplier_name = gamma_item.get("Поставщик", supplier_name)
         # Парсим данные поставщика
         parsed_supplier = parse_supplier_data(supplier_data)
         
@@ -516,7 +452,6 @@ async def process_article(message: types.Message, state: FSMContext):
             f"Магазин: {user_shop}\n"
             f"📦 Артикул: {article}\n"
             f"🏷️ Название: {product_data.get('Название', '')}\n"
-            f"🏭 Поставщик: {supplier_name}\n"
             f"📅 Дата заказа: {order_date}\n"
             f"🚚 Дата поставки: {delivery_date}\n"
         )
@@ -545,7 +480,6 @@ def parse_supplier_data(record):
     delivery_days = str(record.get('Срок доставки в магазин', '0')).strip()
     return {
         'supplier_id': str(record.get('Номер осн. пост.', '')),
-        'name': str(record.get('Название осн. пост.', '')),
         'order_days': sorted(list(set(order_days))),
         'delivery_days': int(delivery_days) if delivery_days.isdigit() else 0
     }
@@ -575,7 +509,6 @@ async def process_order_reason(message: types.Message, state: FSMContext):
         f"Магазин: {user_shop}\n"
         f"📦 Артикул: {data['article']}\n"
         f"🏷️ Название: {data['product_name']}\n"
-        f"🏭 Поставщик: {data.get('supplier_name', 'Неизвестен')}\n"
         f"📅 Дата заказа: {data['order_date']}\n"
         f"🚚 Дата поставки: {data['delivery_date']}\n"
         f"Количество: {data['quantity']}\n"
@@ -648,73 +581,8 @@ async def cancel_order_process(message: types.Message, state: FSMContext):
 
 
 @dp.message(F.text == "📋 Запрос информации")
-async def handle_info_request(message: types.Message, state: FSMContext):
-    user_data = await get_user_data(str(message.from_user.id))
-    if not user_data:
-        await message.answer("❌ Сначала пройдите регистрацию через /start")
-        return
-    
-    await state.update_data(shop=user_data['shop'])
-    await message.answer("🔢 Введите артикул товара:", reply_markup=info_keyboard())
-    await state.set_state(InfoStates.article_input)
-
-@dp.message(InfoStates.article_input, F.text == "🔍 Следующий артикул")
-async def next_article(message: types.Message, state: FSMContext):
-    await message.answer("🔢 Введите новый артикул товара:", reply_markup=info_keyboard())
-    await state.set_state(InfoStates.article_input)
-
-
-
-
-
-@dp.message(InfoStates.article_input)
-async def process_info_article(message: types.Message, state: FSMContext):
-    article = message.text.strip()
-    data = await state.get_data()
-    user_shop = data['shop']
-    
-    try:
-        gamma_data = cache.get("gamma_cluster", [])
-        
-        product_data = next(
-            (item for item in gamma_data
-             if str(item.get("Артикул", "")).strip() == article
-             and str(item.get("Магазин", "")).strip() == user_shop),
-            None
-        )
-        
-        if not product_data:
-            await message.answer("❌ Товар не найден.", reply_markup=info_keyboard())
-            return
-
-        supplier_id = str(product_data.get("Номер осн. пост.", "")).strip()
-        
-        # Используем новую функцию
-        supplier_data, supplier_name = get_supplier_info(supplier_id, user_shop)
-        
-        # Расчет дат
-        order_date, delivery_date = ("N/A", "N/A")
-        if supplier_data:
-            parsed_supplier = parse_supplier_data(supplier_data)
-            order_date, delivery_date = calculate_delivery_date(parsed_supplier)
-
-        response = (
-            f"🏪 Магазин: {user_shop}\n"
-            f"📦 Артикул: {article}\n"
-            f"🏷️ Название: {product_data.get('Название', '')}\n"
-            f"🏭 Поставщик: {supplier_name}\n"
-            f"📅 Дата заказа: {order_date}\n"
-            f"🚚 Дата доставки: {delivery_date}\n"    
-        )
-        
-        await message.answer(response, reply_markup=info_keyboard())
-
-    except Exception as e:
-        await log_error(message.from_user.id, f"Info Error: {str(e)}")
-        await message.answer("⚠️ Ошибка получения информации", reply_markup=info_keyboard())
-
-
-
+async def handle_info_request(message: types.Message):
+    await message.answer("🛠️ Функция в разработке")
 
 
 @dp.message(F.text == "📦 Проверка стока")
