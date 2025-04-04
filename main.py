@@ -362,9 +362,17 @@ async def get_product_info(article: str, user_shop: str) -> dict:
         if not supplier_data:
             return None
 
+        # Получаем название поставщика (следующий столбец после ID)
+        headers = supplier_sheet.headers
+        supplier_id_index = headers.index("Номер осн. пост.")
+        supplier_name = list(supplier_data.values())[supplier_id_index + 1]
+
         parsed_supplier = parse_supplier_data(supplier_data)
         order_date, delivery_date = calculate_delivery_date(parsed_supplier)
 
+        supplier_name = supplier_data.get("Название осн. пост.", "Не указано").strip()
+
+        
         return {
             'article': article,
             'product_name': product_data.get('Название', ''),
@@ -372,10 +380,14 @@ async def get_product_info(article: str, user_shop: str) -> dict:
             'order_date': order_date,
             'delivery_date': delivery_date,
             'supplier_id': supplier_id,
+            'supplier_name': supplier_name,  # Новое поле
             'shop': user_shop,
             'parsed_supplier': parsed_supplier
         }
         
+    except (ValueError, IndexError) as e:
+        logging.error(f"Supplier name error: {str(e)}")
+        return None
     except Exception as e:
         logging.error(f"Product info error: {str(e)}")
         return None
@@ -468,8 +480,10 @@ async def process_article(message: types.Message, state: FSMContext):
         f"Магазин: {user_shop}\n"
         f"📦 Артикул: {product_info['article']}\n"
         f"🏷️ Название: {product_info['product_name']}\n"
+        f"🏭 Поставщик: {product_info['supplier_name']}\n" 
         f"📅 Дата заказа: {product_info['order_date']}\n"
         f"🚚 Дата поставки: {product_info['delivery_date']}\n"
+        
     )
     
     await state.update_data(
@@ -479,6 +493,7 @@ async def process_article(message: types.Message, state: FSMContext):
         order_date=product_info['order_date'],
         delivery_date=product_info['delivery_date'],
         supplier_id=product_info['supplier_id']
+        supplier_name=product_info['supplier_name']
     )
     
     await message.answer(response)
@@ -524,6 +539,7 @@ async def process_order_reason(message: types.Message, state: FSMContext):
         f"Магазин: {user_shop}\n"
         f"📦 Артикул: {data['article']}\n"
         f"🏷️ Название: {data['product_name']}\n"
+        f"🏭 Поставщик: {product_info['supplier_name']}\n" 
         f"📅 Дата заказа: {data['order_date']}\n"
         f"🚚 Дата поставки: {data['delivery_date']}\n"
         f"Количество: {data['quantity']}\n"
@@ -622,12 +638,12 @@ async def process_info_request(message: types.Message, state: FSMContext):
     response = (
         f"🔍 Информация о товаре:\n"
         f"Магазин: {user_shop}\n"
-        f"Артикул: {product_info['article']}\n"
-        f"Название: {product_info['product_name']}\n"
-        f"Отдел: {product_info['department']}\n"
-        f"Ближайшая дата заказа: {product_info['order_date']}\n"
-        f"Ожидаемая дата поставки: {product_info['delivery_date']}\n"
-        f"Поставщик: {product_info['supplier_id']}"
+        f"📦Артикул: {product_info['article']}\n"
+        f"🏷️Название: {product_info['product_name']}\n"
+        f"🔢Отдел: {product_info['department']}\n"
+        f"📅Ближайшая дата заказа: {product_info['order_date']}\n"
+        f"🚚Ожидаемая дата поставки: {product_info['delivery_date']}\n"
+        f"🏭 Поставщик: {product_info['supplier_name']}" 
     )
     
     await message.answer(response, reply_markup=main_menu_keyboard())
