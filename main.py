@@ -9,6 +9,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.enums import ParseMode
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
 from aiogram.exceptions import TelegramForbiddenError
+from aiogram.filters import Command
 from contextlib import suppress
 from google.oauth2.service_account import Credentials
 import gspread
@@ -108,6 +109,11 @@ class InfoRequest(StatesGroup):
     article_input = State()
 
 
+class AdminBroadcast(StatesGroup):
+    message_input = State()
+    confirmation = State()
+
+
 # ===================== ВСПОМОГАТЕЛЬНЫЙ КЛАСС =====================
 class FakeSheet:
     """Имитация объекта листа для работы с кэшированными данными"""
@@ -146,18 +152,21 @@ def article_input_keyboard():
     return builder.as_markup(resize_keyboard=True)
 
 
-def article_input_keyboard():
-    builder = ReplyKeyboardBuilder()
-    builder.button(text="❌ Отмена")
-    return builder.as_markup(resize_keyboard=True)
-
-
 def confirm_keyboard():
     builder = ReplyKeyboardBuilder()
     builder.button(text="✅ Подтвердить")
     builder.button(text="✏️ Исправить количество")
     builder.button(text="❌ Отмена")
     builder.adjust(2, 1)
+    return builder.as_markup(resize_keyboard=True)
+
+
+def broadcast_confirmation_keyboard():
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="✅ Подтвердить рассылку")
+    builder.button(text="✏️ Редактировать сообщение")
+    builder.button(text="❌ Отменить рассылку")
+    builder.adjust(1, 2)
     return builder.as_markup(resize_keyboard=True)
 
 
@@ -272,6 +281,27 @@ async def service_mode_middleware(handler, event, data):
     return await handler(event, data)
 
 
+
+@dp.message(F.text.lower().in_(["отмена", "❌ отмена", "/cancel"]))
+async def cancel_handler(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("🔄 Операция отменена", 
+                        reply_markup=main_menu_keyboard())
+
+
+
+@dp.update.middleware()
+async def timeout_middleware(handler, event, data):
+    state = data.get('state')
+    if state:
+        current_state = await state.get_state()
+        if current_state:
+            last_update = datetime.now() - state.last_update
+            if last_update > timedelta(minutes=15):
+                await state.clear()
+                await event.answer("🕒 Сессия истекла. Начните заново.")
+                return
+    return await handler(event, data)
 
 # ===================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====================
 async def get_user_data(user_id: str) -> Dict[str, Any]:
@@ -394,7 +424,7 @@ async def get_product_info(article: str, user_shop: str) -> dict:
 
 
 # ===================== ОБРАБОТЧИКИ КОМАНД =====================
-@dp.message(F.text == "/start")
+@dp.message(Command("start"))
 async def start_handler(message: types.Message, state: FSMContext):
     user_data = await get_user_data(str(message.from_user.id))
     if user_data:
@@ -604,7 +634,13 @@ async def cancel_order(message: types.Message, state: FSMContext):
 
 
 @dp.message(OrderStates.article_input, F.text == "❌ Отмена")
+async def cancel_order_process(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("❌ Создание заказа отменено.", reply_markup=main_menu_keyboard())
 @dp.message(OrderStates.quantity_input, F.text == "❌ Отмена")
+async def cancel_order_process(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("❌ Создание заказа отменено.", reply_markup=main_menu_keyboard())
 @dp.message(OrderStates.order_reason_input, F.text == "❌ Отмена")
 async def cancel_order_process(message: types.Message, state: FSMContext):
     await state.clear()
@@ -713,10 +749,139 @@ async def check_cache(message: types.Message):
     )
     await message.answer(response)
 
+#===========================Рассылка==================================
+
+
+@dp.message(Command("broadcast"))
+async def start_broadcast(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMINS:
+        return
+    
+    await message.answer(
+        "📢 Введите сообщение для рассылки (можно с медиа-вложениями):",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    await state.set_state(AdminBroadcast.message_input)
+
+@dp.message(AdminBroadcast.message_input)
+async def process_broadcast_message(message: types.Message, state: FSMContext):
+    # Сохраняем контент в зависимости от типа
+    content = {
+        'text': message.html_text,
+        'media': None,
+        'type': 'text'
+    }
+
+    if message.photo:
+        content.update({
+            'type': 'photo',
+            'media': message.photo[-1].file_id,
+            'caption': message.caption
+        })
+    elif message.document:
+        content.update({
+            'type': 'document',
+            'media': message.document.file_id,
+            'caption': message.caption
+        })
+
+    await state.update_data(content=content)
+    
+    preview_text = "✉️ Предпросмотр сообщения:\n\n"
+    if content['type'] == 'text':
+        preview_text += content['text']
+    else:
+        preview_text += f"[{content['type'].upper()}] {content.get('caption', '')}"
+
+    await message.answer(
+        preview_text,
+        reply_markup=broadcast_confirmation_keyboard()
+    )
+    await state.set_state(AdminBroadcast.confirmation)
+
+@dp.message(AdminBroadcast.confirmation, F.text == "✅ Подтвердить рассылку")
+async def confirm_broadcast(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    content = data['content']
+    
+    # Записываем в логи
+    logs_sheet.append_row([
+        datetime.now().strftime("%d.%m.%Y %H:%M"),
+        message.from_user.id,
+        "BROADCAST",
+        f"Type: {content['type']}, Chars: {len(content.get('text', '') or content.get('caption', ''))}"
+    ])
+    
+    await message.answer("🔄 Начинаю рассылку...", reply_markup=main_menu_keyboard())
+    
+    # Асинхронная рассылка
+    asyncio.create_task(send_broadcast(content))
+    
+    await state.clear()
+
+async def send_broadcast(content: dict):
+    users = users_sheet.col_values(1)[1:]  # ID из колонки A
+    success = 0
+    failed = 0
+    
+    for user_id in users:
+        try:
+            if content['type'] == 'text':
+                await bot.send_message(
+                    chat_id=int(user_id),
+                    text=content['text'],
+                    parse_mode=ParseMode.HTML
+                )
+            elif content['type'] == 'photo':
+                await bot.send_photo(
+                    chat_id=int(user_id),
+                    photo=content['media'],
+                    caption=content.get('caption', ''),
+                    parse_mode=ParseMode.HTML
+                )
+            elif content['type'] == 'document':
+                await bot.send_document(
+                    chat_id=int(user_id),
+                    document=content['media'],
+                    caption=content.get('caption', ''),
+                    parse_mode=ParseMode.HTML
+                )
+            success += 1
+            await asyncio.sleep(0.1)  # Защита от ограничений Telegram
+        except Exception as e:
+            failed += 1
+            logging.error(f"Broadcast error to {user_id}: {str(e)}")
+    
+    # Отправляем отчет админу
+    await bot.send_message(
+        chat_id=ADMINS[0],
+        text=f"📊 Результаты рассылки:\n\n✅ Успешно: {success}\n❌ Не удалось: {failed}"
+    )
+
+# Добавить в существующий код
+@dp.message(AdminBroadcast.confirmation, F.text == "❌ Отменить рассылку")
+async def cancel_broadcast(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("❌ Рассылка отменена", reply_markup=main_menu_keyboard())
+
+@dp.message(AdminBroadcast.confirmation, F.text == "✏️ Редактировать сообщение")
+async def edit_broadcast(message: types.Message, state: FSMContext):
+    await message.answer("📝 Введите новое сообщение:", reply_markup=ReplyKeyboardRemove())
+    await state.set_state(AdminBroadcast.message_input)
+
 
 
 # ===================== ОБЩАЯ ЛОГИКА ЗАПУСКА =====================
+async def scheduled_cache_update():
+    while True:
+        await asyncio.sleep(3600 * 12)  # Обновление каждые 12 часов
+        try:
+            await preload_cache()
+        except Exception as e:
+            logging.error(f"Ошибка обновления кэша: {str(e)}")
+
 async def startup():
+    asyncio.create_task(scheduled_cache_update()):
     """Общая инициализация для всех режимов"""
     startup_msg = "🟢 Бот запущен"
     print(startup_msg)
@@ -794,7 +959,6 @@ async def main():
 
 # ===================== ЗАВЕРШЕНИЕ РАБОТЫ =====================
 async def shutdown():
-    """Корректное завершение работы"""
     try:
         if USE_WEBHOOKS:
             await bot.delete_webhook()
@@ -806,9 +970,6 @@ async def shutdown():
         tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
         for task in tasks:
             task.cancel()
-        if loop.is_running():
-            loop.stop()
-
 if __name__ == "__main__":
     try:
         loop = asyncio.new_event_loop()
