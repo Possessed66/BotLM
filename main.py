@@ -296,19 +296,19 @@ async def timeout_middleware(handler, event, data):
     if state:
         current_state = await state.get_state()
         if current_state:
-            # Получаем данные состояния
+            # Получаем время последней активности из хранилища
             state_data = await state.get_data()
-            last_activity = state_data.get('last_activity')
+            last_activity_str = state_data.get('last_activity')
             
-            if last_activity:
-                elapsed = datetime.now() - last_activity
-                if elapsed > timedelta(minutes=15):
+            if last_activity_str:
+                last_activity = datetime.fromisoformat(last_activity_str)
+                if datetime.now() - last_activity > timedelta(minutes=15):
                     await state.clear()
                     await event.answer("🕒 Сессия истекла. Начните заново.")
                     return
             
-            # Обновляем время последней активности
-            await state.update_data(last_activity=datetime.now())
+            # Обновляем время активности
+            await state.update_data(last_activity=datetime.now().isoformat())
     
     return await handler(event, data)
 
@@ -435,6 +435,7 @@ async def get_product_info(article: str, user_shop: str) -> dict:
 # ===================== ОБРАБОТЧИКИ КОМАНД =====================
 @dp.message(Command("start"))
 async def start_handler(message: types.Message, state: FSMContext):
+    await state.update_data(last_activity=datetime.now().isoformat())
     user_data = await get_user_data(str(message.from_user.id))
     if user_data:
         await message.answer("ℹ️ Вы уже зарегистрированы!", reply_markup=main_menu_keyboard())
@@ -447,6 +448,7 @@ async def start_handler(message: types.Message, state: FSMContext):
 
 @dp.message(Registration.name)
 async def process_name(message: types.Message, state: FSMContext):
+    await state.update_data(last_activity=datetime.now().isoformat())
     await state.update_data(name=message.text.strip())
     await message.answer("📝 Введите вашу фамилию:")
     await state.set_state(Registration.surname)
@@ -454,6 +456,7 @@ async def process_name(message: types.Message, state: FSMContext):
 
 @dp.message(Registration.surname)
 async def process_surname(message: types.Message, state: FSMContext):
+    await state.update_data(last_activity=datetime.now().isoformat())
     await state.update_data(surname=message.text.strip())
     await message.answer("💼 Введите вашу должность:")
     await state.set_state(Registration.position)
@@ -461,6 +464,7 @@ async def process_surname(message: types.Message, state: FSMContext):
 
 @dp.message(Registration.position)
 async def process_position(message: types.Message, state: FSMContext):
+    await state.update_data(last_activity=datetime.now().isoformat())
     await state.update_data(position=message.text.strip())
     await message.answer("🏪 Введите номер магазина (только цифры, без нулей):")
     await state.set_state(Registration.shop)
@@ -468,6 +472,7 @@ async def process_position(message: types.Message, state: FSMContext):
 
 @dp.message(Registration.shop)
 async def process_shop(message: types.Message, state: FSMContext):
+    await state.update_data(last_activity=datetime.now().isoformat())
     if not message.text.strip().isdigit():
         await message.answer("❌ Номер магазина должен быть числом! Повторите ввод:")
         return
@@ -490,6 +495,7 @@ async def process_shop(message: types.Message, state: FSMContext):
 
 @dp.message(F.text == "🛒 Заказ под клиента")
 async def handle_client_order(message: types.Message, state: FSMContext):
+    await state.update_data(last_activity=datetime.now().isoformat())
     user_data = await get_user_data(str(message.from_user.id))
     if not user_data:
         await message.answer("❌ Сначала пройдите регистрацию через /start")
@@ -506,6 +512,7 @@ async def handle_client_order(message: types.Message, state: FSMContext):
 
 @dp.message(OrderStates.article_input)
 async def process_article(message: types.Message, state: FSMContext):
+    await state.update_data(last_activity=datetime.now().isoformat())
     article = message.text.strip()
     data = await state.get_data()
     user_shop = data['shop']
@@ -556,6 +563,7 @@ def parse_supplier_data(record):
 
 @dp.message(OrderStates.quantity_input)
 async def process_quantity(message: types.Message, state: FSMContext):
+    await state.update_data(last_activity=datetime.now().isoformat())
     if not message.text.strip().isdigit():
         await message.answer("❌ Введите число!")
         return
@@ -568,6 +576,7 @@ async def process_quantity(message: types.Message, state: FSMContext):
 
 @dp.message(OrderStates.order_reason_input)
 async def process_order_reason(message: types.Message, state: FSMContext):
+    await state.update_data(last_activity=datetime.now().isoformat())
     data = await state.get_data()
     order_reason = message.text.strip()
     user_shop = data['shop']
@@ -590,6 +599,7 @@ async def process_order_reason(message: types.Message, state: FSMContext):
 
 @dp.message(OrderStates.confirmation, F.text == "✅ Подтвердить")
 async def final_confirmation(message: types.Message, state: FSMContext):
+    await state.update_data(last_activity=datetime.now().isoformat())
     data = await state.get_data()
     try:
         # Проверка обязательных полей
@@ -630,6 +640,7 @@ async def final_confirmation(message: types.Message, state: FSMContext):
 
 @dp.message(OrderStates.confirmation, F.text == "✏️ Исправить количество")
 async def correct_quantity(message: types.Message, state: FSMContext):
+    await state.update_data(last_activity=datetime.now().isoformat())
     await message.answer("🔢 Введите новое количество:", reply_markup=types.ReplyKeyboardRemove())
     await state.set_state(OrderStates.quantity_input)
 
@@ -658,6 +669,7 @@ async def cancel_order_process(message: types.Message, state: FSMContext):
 
 @dp.message(F.text == "📋 Запрос информации")
 async def handle_info_request(message: types.Message, state: FSMContext):
+    await state.update_data(last_activity=datetime.now().isoformat())
     user_data = await get_user_data(str(message.from_user.id))
     if not user_data:
         await message.answer("❌ Сначала пройдите регистрацию через /start")
@@ -670,6 +682,7 @@ async def handle_info_request(message: types.Message, state: FSMContext):
 
 @dp.message(InfoRequest.article_input)
 async def process_info_request(message: types.Message, state: FSMContext):
+    await state.update_data(last_activity=datetime.now().isoformat())
     article = message.text.strip()
     data = await state.get_data()
     user_shop = data['shop']
@@ -763,6 +776,7 @@ async def check_cache(message: types.Message):
 
 @dp.message(Command("broadcast"))
 async def start_broadcast(message: types.Message, state: FSMContext):
+    await state.update_data(last_activity=datetime.now().isoformat())
     if message.from_user.id not in ADMINS:
         return
     
@@ -810,6 +824,7 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
 
 @dp.message(AdminBroadcast.confirmation, F.text == "✅ Подтвердить рассылку")
 async def confirm_broadcast(message: types.Message, state: FSMContext):
+    await state.update_data(last_activity=datetime.now().isoformat())
     data = await state.get_data()
     content = data['content']
     
