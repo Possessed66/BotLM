@@ -296,11 +296,20 @@ async def timeout_middleware(handler, event, data):
     if state:
         current_state = await state.get_state()
         if current_state:
-            last_update = datetime.now() - state.last_update
-            if last_update > timedelta(minutes=15):
-                await state.clear()
-                await event.answer("🕒 Сессия истекла. Начните заново.")
-                return
+            # Получаем данные состояния
+            state_data = await state.get_data()
+            last_activity = state_data.get('last_activity')
+            
+            if last_activity:
+                elapsed = datetime.now() - last_activity
+                if elapsed > timedelta(minutes=15):
+                    await state.clear()
+                    await event.answer("🕒 Сессия истекла. Начните заново.")
+                    return
+            
+            # Обновляем время последней активности
+            await state.update_data(last_activity=datetime.now())
+    
     return await handler(event, data)
 
 # ===================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====================
