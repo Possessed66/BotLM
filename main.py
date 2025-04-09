@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.enums import ParseMode
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
+from aiogram.types import ReplyKeyboardRemove
 from aiogram.exceptions import TelegramForbiddenError
 from aiogram.filters import Command
 from contextlib import suppress
@@ -782,7 +783,7 @@ async def start_broadcast(message: types.Message, state: FSMContext):
     
     await message.answer(
         "📢 Введите сообщение для рассылки (можно с медиа-вложениями):",
-        reply_markup=ReplyKeyboardRemove()
+        reply_markup=types.ReplyKeyboardRemove()
     )
     await state.set_state(AdminBroadcast.message_input)
 
@@ -890,7 +891,7 @@ async def cancel_broadcast(message: types.Message, state: FSMContext):
 
 @dp.message(AdminBroadcast.confirmation, F.text == "✏️ Редактировать сообщение")
 async def edit_broadcast(message: types.Message, state: FSMContext):
-    await message.answer("📝 Введите новое сообщение:", reply_markup=ReplyKeyboardRemove())
+    await message.answer("📝 Введите новое сообщение:", reply_markup=types.ReplyKeyboardRemove())  
     await state.set_state(AdminBroadcast.message_input)
 
 
