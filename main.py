@@ -881,7 +881,7 @@ async def scheduled_cache_update():
             logging.error(f"Ошибка обновления кэша: {str(e)}")
 
 async def startup():
-    asyncio.create_task(scheduled_cache_update()):
+    asyncio.create_task(scheduled_cache_update())
     """Общая инициализация для всех режимов"""
     startup_msg = "🟢 Бот запущен"
     print(startup_msg)
