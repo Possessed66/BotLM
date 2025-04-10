@@ -276,9 +276,12 @@ async def maintenance_off(message: types.Message):
 @dp.update.middleware()
 async def service_mode_middleware(handler, event, data):
     if SERVICE_MODE and event.message:
-        with suppress(TelegramForbiddenError):
-            await event.message.answer("⏳ Бот в режиме обслуживания. Попробуйте позже.")
-        return
+        # Проверяем, является ли пользователь админом
+        user_id = event.message.from_user.id
+        if user_id not in ADMINS:
+            with suppress(TelegramForbiddenError):
+                await event.message.answer("⏳ Бот в режиме обслуживания. Попробуйте позже.")
+            return
     return await handler(event, data)
 
 
