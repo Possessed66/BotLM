@@ -998,7 +998,6 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
 async def check_orders_notifications():
-    """Проверка и отправка уведомлений с оптимизацией запросов"""
     try:
         spreadsheet = client.open(ORDERS_SPREADSHEET_NAME)
         stats_sheet = spreadsheet.worksheet(STATS_SHEET_NAME)
@@ -1006,14 +1005,22 @@ async def check_orders_notifications():
         for sheet_name in ORDERS_SHEET_NAMES:
             try:
                 worksheet = spreadsheet.worksheet(sheet_name)
-                # Используем формулу для фильтрации данных
-                query = (
-                    f"SELECT B, P, Q, R WHERE "
-                    f"P != '' AND Q != '' AND R != '' AND S = ''"
-                )
-                records = worksheet.get_all_records(formula=query)
                 
-                for idx, record in enumerate(records, start=2):
+                # Получаем все записи
+                records = worksheet.get_all_records()
+                
+                # Фильтруем вручную
+                filtered_records = [
+                    r for r in records
+                    if (
+                        r.get('order_date') and 
+                        r.get('order_id') and 
+                        r.get('chat_id') and 
+                        not r.get('notified')
+                    )
+                ]
+                
+                for idx, record in enumerate(filtered_records, start=2):
                     await process_order_record(worksheet, stats_sheet, idx, record)
                     
             except SpreadsheetNotFound:
