@@ -19,6 +19,8 @@ from aiohttp import web
 import asyncio
 from cachetools import cached, TTLCache
 import logging
+from tenacity import retry, stop_after_attempt, wait_exponential
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -252,7 +254,56 @@ def validate_cache_keys():
             raise KeyError(f"Отсутствует обязательный ключ кэша: {key}")
 
 
-# ===================== НОВЫЕ КОМАНДЫ ДЛЯ АДМИНОВ =====================
+# ===================== КОМАНДЫ ДЛЯ АДМИНОВ =====================
+@dp.message(Command("stats"))
+async def get_stats(message: types.Message):
+    """Получение краткой статистики"""
+    if message.from_user.id not in ADMINS:
+        return
+    
+    try:
+        spreadsheet = client.open(ORDERS_SPREADSHEET_NAME)
+        stats_sheet = spreadsheet.worksheet(STATS_SHEET_NAME)
+        records = stats_sheet.get_all_records()
+        
+        total = len(records)
+        success = len([r for r in records if '✅' in r['Status']])
+        failed = total - success
+        
+        response = (
+            f"📊 Статистика уведомлений:\n\n"
+            f"• Всего отправок: {total}\n"
+            f"• Успешных: {success}\n"
+            f"• Неудачных: {failed}\n"
+            f"• Последние 5 ошибок:\n"
+        )
+        
+        for r in records[-5:]:
+            if '❌' in r['Status']:
+                response += f"\n- {r['Date']}: {r['Status']}"
+                
+        await message.answer(response)
+        
+    except Exception as e:
+        await message.answer(f"⚠️ Ошибка получения статистики: {str(e)}")
+
+@dp.message(Command("full_stats"))
+async def get_full_stats(message: types.Message):
+    """Экспорт полной статистики"""
+    if message.from_user.id not in ADMINS:
+        return
+    
+    try:
+        spreadsheet = client.open(ORDERS_SPREADSHEET_NAME)
+        stats_sheet = spreadsheet.worksheet(STATS_SHEET_NAME)
+        stats_sheet.export('csv')
+        
+        with open("stats.csv", "rb") as file:
+            await message.answer_document(file, caption="📊 Полная статистика")
+            
+    except Exception as e:
+        await message.answer(f"⚠️ Ошибка экспорта: {str(e)}")
+
 @dp.message(F.text == "/maintenance_on")
 async def maintenance_on(message: types.Message):
     if message.from_user.id not in ADMINS:
@@ -899,6 +950,141 @@ async def edit_broadcast(message: types.Message, state: FSMContext):
 
 
 
+
+
+#=============================УВЕДОМЛЕНИЯ=========================
+
+
+
+# ===================== ИНИЦИАЛИЗАЦИЯ СТАТИСТИКИ =====================
+async def initialize_stats_sheet():
+    """Создание листа статистики при первом запуске"""
+    try:
+        spreadsheet = client.open(ORDERS_SPREADSHEET_NAME)
+        spreadsheet.add_worksheet(title=STATS_SHEET_NAME, rows=1000, cols=4)
+        stats_sheet = spreadsheet.worksheet(STATS_SHEET_NAME)
+        stats_sheet.update('A1:D1', [['Дата', 'НомерЗаказа', 'ChatID', 'Статус']])
+    except Exception as e:
+        logging.info(f"Статистический лист уже существует: {str(e)}")
+
+
+
+# ===================== КОНФИГУРАЦИЯ УВЕДОМЛЕНИЙ =====================
+ORDERS_SHEET_NAMES = [str(i) for i in range(1, 16)]
+CHECK_INTERVAL = 300  # 5 минут
+STATS_SHEET_NAME = "Статистика Уведомлений"
+
+COLUMNS = {
+    'order_number': 3,   # B
+    'order_date': 16,    # P
+    'order_id': 17,      # Q
+    'chat_id': 18,       # R 
+    'notified': 19       # S
+}
+
+
+
+# ===================== ЗАПУСК ФОНОВЫХ ЗАДАЧ =====================
+async def scheduled_notifications_checker():
+    """Периодическая проверка уведомлений"""
+    while True:
+        await check_orders_notifications()
+        await asyncio.sleep(CHECK_INTERVAL)
+
+
+
+# ===================== ОСНОВНАЯ ЛОГИКА УВЕДОМЛЕНИЙ =====================
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+async def check_orders_notifications():
+    """Проверка и отправка уведомлений с оптимизацией запросов"""
+    try:
+        spreadsheet = client.open(ORDERS_SPREADSHEET_NAME)
+        stats_sheet = spreadsheet.worksheet(STATS_SHEET_NAME)
+        
+        for sheet_name in ORDERS_SHEET_NAMES:
+            try:
+                worksheet = spreadsheet.worksheet(sheet_name)
+                # Используем формулу для фильтрации данных
+                query = (
+                    f"SELECT B, P, Q, R WHERE "
+                    f"P != '' AND Q != '' AND R != '' AND S = ''"
+                )
+                records = worksheet.get_all_records(formula=query)
+                
+                for idx, record in enumerate(records, start=2):
+                    await process_order_record(worksheet, stats_sheet, idx, record)
+                    
+            except SpreadsheetNotFound:
+                continue
+
+    except APIError as e:
+        logging.error(f"Google API Error: {str(e)}")
+    except Exception as e:
+        logging.error(f"Unexpected error: {str(e)}")
+
+
+# ===================== КОНФИГУРАЦИЯ ТЕСТОВОГО РЕЖИМА =====================
+TEST_MODE = True  # Переключить на False для реальных уведомлений
+
+#===================== ОСНОВНАЯ ЛОГИКА УВЕДОМЛЕНИЙ =====================
+async def process_order_record(worksheet, stats_sheet, row_num, record):
+    """Обработка одной записи с валидацией"""
+    try:
+        chat_id = str(record['chat_id']).strip()
+        
+        # Валидация chat_id
+        if not chat_id.isdigit():
+            raise ValueError(f"Неверный Chat ID: {chat_id}")
+
+        # Проверка тестового режима
+        if TEST_MODE and chat_id not in map(str, ADMINS):
+            logging.info(f"Тестовый режим: пропуск chat_id {chat_id}")
+            return
+        
+        # Формирование сообщения
+        message = (
+            f"📦 Заказ №{record['order_number']}\n"
+            f"🗓 Дата: {record['order_date']}\n"
+            f"🔢 Номер заказа: {record['order_id']}"
+        )
+        
+        # Добавляем пометку для тестового режима
+        if TEST_MODE:
+            message = "[ТЕСТ] " + message
+
+        # Отправка сообщения
+        try:
+            await bot.send_message(chat_id=int(chat_id), text=message)
+            status = "✅ Успешно"
+        except TelegramForbiddenError:
+            status = "❌ Пользователь заблокировал бота"
+        except Exception as e:
+            status = f"❌ Ошибка: {str(e)}"
+            raise
+        
+        # Логирование статистики
+        stats_record = [
+            datetime.now().strftime("%d.%m.%Y %H:%M"),
+            record['order_number'],
+            chat_id,
+            status
+        ]
+        stats_sheet.append_row(stats_record)
+        
+        # Обновление статуса в основном листе
+        worksheet.update_cell(row_num, COLUMNS['notified'], status.split(':')[0])
+        
+    except Exception as e:
+        logging.error(f"Ошибка обработки заказа {record['order_number']}: {str(e)}")
+        stats_sheet.append_row([
+            datetime.now().strftime("%d.%m.%Y %H:%M"),
+            record.get('order_number', 'N/A'),
+            chat_id,
+            f"❌ Критическая ошибка: {str(e)}"
+        ])
+
 # ===================== ОБЩАЯ ЛОГИКА ЗАПУСКА =====================
 async def scheduled_cache_update():
     while True:
@@ -910,10 +1096,16 @@ async def scheduled_cache_update():
 
 async def startup():
     asyncio.create_task(scheduled_cache_update())
+    if TEST_MODE:
+        await notify_admins("🔧 Бот запущен в ТЕСТОВОМ РЕЖИМЕ. Уведомления отправляются только администраторам.")
+    
+    await initialize_stats_sheet()
+    asyncio.create_task(scheduled_notifications_checker())
     """Общая инициализация для всех режимов"""
     startup_msg = "🟢 Бот запущен"
     print(startup_msg)
-    
+    if TEST_MODE:
+        await notify_admins("🔧 Бот запущен в ТЕСТОВОМ РЕЖИМЕ. Уведомления отправляются только администраторам.")
     try:
         print("♻️ Начало загрузки кэша...")
         await preload_cache()
