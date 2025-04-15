@@ -1039,7 +1039,7 @@ async def check_orders_notifications():
 
 
 # ===================== КОНФИГУРАЦИЯ ТЕСТОВОГО РЕЖИМА =====================
-TEST_MODE = True  # Переключить на False для реальных уведомлений
+TEST_MODE = False  # Переключить на False для реальных уведомлений
 
 #===================== ОСНОВНАЯ ЛОГИКА УВЕДОМЛЕНИЙ =====================
 async def process_order_record(worksheet, stats_sheet, row_num, record):
