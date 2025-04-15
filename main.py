@@ -1,4 +1,4 @@
-import os
+аimport os
 import json
 from typing import Dict, Any, List
 from datetime import datetime, timedelta
@@ -987,8 +987,13 @@ COLUMNS = {
 # ===================== ЗАПУСК ФОНОВЫХ ЗАДАЧ =====================
 async def scheduled_notifications_checker():
     """Периодическая проверка уведомлений"""
+    print("🚀 Запущен фоновый процесс проверки уведомлений")
     while True:
-        await check_orders_notifications()
+        try:
+            await check_orders_notifications()
+            print(f"⏳ Следующая проверка через {CHECK_INTERVAL/60} минут")
+        except Exception as e:
+            print(f"❌ Ошибка в scheduled_notifications_checker: {str(e)}")
         await asyncio.sleep(CHECK_INTERVAL)
 
 
@@ -999,32 +1004,33 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
 async def check_orders_notifications():
     try:
+        print("🔥 Начало проверки уведомлений")
         spreadsheet = client.open(ORDERS_SPREADSHEET_NAME)
         stats_sheet = spreadsheet.worksheet(STATS_SHEET_NAME)
+        print(f"Лист статистики: {stats_sheet}")
         
         for sheet_name in ORDERS_SHEET_NAMES:
             try:
                 worksheet = spreadsheet.worksheet(sheet_name)
-                
-                # Получаем все записи
+                print(f"обработка листа {sheet_name}")
                 records = worksheet.get_all_records()
-                
-                # Фильтруем вручную
                 filtered_records = [
                     r for r in records
-                    if (
-                        r.get('order_date') and 
-                        r.get('order_id') and 
-                        r.get('chat_id') and 
-                        not r.get('notified')
-                    )
+                    if r.get('order_date') and 
+                    r.get('order_id') and 
+                    r.get('chat_id') and 
+                    not r.get('notified')
                 ]
+                print(f"Найдено записей для обработки: {len(filtered_records)}")
                 
                 for idx, record in enumerate(filtered_records, start=2):
                     await process_order_record(worksheet, stats_sheet, idx, record)
-                    
             except SpreadsheetNotFound:
-                continue
+                print(f"⚠️ Лист {sheet_name} не найден")
+            except Exception as e:
+                print(f"Ошибка в листе {sheet_name}: {str(e)}")
+    except Exception as e:
+        print(f"❌ Критическая ошибка в check_orders_notifications: {str(e)}")
 
     except APIError as e:
         logging.error(f"Google API Error: {str(e)}")
