@@ -1071,7 +1071,7 @@ async def process_order_record(worksheet, stats_sheet, row_num, record):
         # Отправка сообщения
         try:
             await bot.send_message(chat_id=int(chat_id), text=message)
-            status = 1
+            status = "✅ Успешно"
         except TelegramForbiddenError:
             status = "Пользователь заблокировал бота"
         except Exception as e:
@@ -1101,9 +1101,9 @@ async def process_order_record(worksheet, stats_sheet, row_num, record):
         print("✅ Статистика записана")
         
         # Обновление статуса в основном листе
-        status_code = status # 1 - отправлено
+        status_code = status.split(':')[0][:2] # 1 - отправлено
         print(f"🔄 Обновление S{row_num}: {status_code}")
-        worksheet.update_cell(int(row_num), 19, status)
+        worksheet.update_cell(int(row_num), 19, status_code) # 19 здесь номер столбца S Где указывается отправлено ли уведомление
         print(f"✅ Статус обновлен в строке {row_num}, столбец S: {status_code}")
         
     except KeyError as e:
