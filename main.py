@@ -1101,7 +1101,7 @@ async def process_order_record(worksheet, stats_sheet, row_num, record):
         print("✅ Статистика записана")
         
         # Обновление статуса в основном листе
-        status_code = status "Неуспешно"  # Например, "✅" или "❌"
+        status_code = status # 1 - отправлено
         print(f"🔄 Обновление S{row_num}: {status_code}")
         worksheet.update_cell(int(row_num), COLUMNS['notified'], status.split(':')[0])
         print(f"✅ Статус обновлен в строке {row_num}, столбец S: {status_code}")
