@@ -1074,7 +1074,7 @@ async def process_order_record(worksheet, stats_sheet, row_num, record):
             status = f"❌ Ошибка: {str(e)}"
             raise
         except KeyError as e:
-        print(f"❌ Ошибка: {str(e)}")
+            print(f"❌ Ошибка: {str(e)}")
         # Логируем проблему
         stats_sheet.append_row([
             datetime.now().strftime("%d.%m.%Y %H:%M"),
