@@ -1009,10 +1009,14 @@ async def check_orders_notifications():
         for sheet_name in ORDERS_SHEET_NAMES:
             try:
                 worksheet = spreadsheet.worksheet(sheet_name)
-                records = worksheet.get_all_records()
-                # Используем названия столбцов из COLUMNS
+                # Получаем все записи с их номерами строк
+                all_records = worksheet.get_all_records()
+                # Добавляем номер строки в каждую запись
+                for idx, record in enumerate(all_records, start=2):
+                    record['row_number'] = idx
+                # Фильтрация
                 filtered_records = [
-                    r for r in records
+                    r for r in all_records
                     if (
                         r.get(COLUMNS['order_date']) and  # Проверка "Дата заказа"
                         r.get(COLUMNS['order_id']) and    # Проверка "ID заказа"
@@ -1021,8 +1025,8 @@ async def check_orders_notifications():
                     )
                 ]
                 print(f"Найдено записей для обработки: {len(filtered_records)}")
-                for idx, record in enumerate(filtered_records, start=2):
-                    await process_order_record(worksheet, stats_sheet, idx, record)
+                for record in filtered_records:
+                    await process_order_record(worksheet, stats_sheet, record['row_number'], record)
             except Exception as e:
                 print(f"Ошибка в листе {sheet_name}: {str(e)}")
     except Exception as e:
@@ -1099,7 +1103,7 @@ async def process_order_record(worksheet, stats_sheet, row_num, record):
         # Обновление статуса в основном листе
         status_code = status.split(':')[0][:2]  # Например, "✅" или "❌"
         print(f"🔄 Обновление S{row_num}: {status_code}")
-        worksheet.update_cell(row_num, COLUMNS['notified'], status_code)
+        worksheet.update_cell(row_num, COLUMNS['notified'], status.split(':')[0])
         print("✅ Статус обновлен")
         
     except KeyError as e:
