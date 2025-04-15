@@ -971,7 +971,7 @@ async def initialize_stats_sheet():
 
 # ===================== КОНФИГУРАЦИЯ УВЕДОМЛЕНИЙ =====================
 ORDERS_SHEET_NAMES = [str(i) for i in range(1, 16)]
-CHECK_INTERVAL = 300  # 5 минут
+CHECK_INTERVAL = 1800  # 30 минут
 STATS_SHEET_NAME = "Статистика Уведомлений"
 
 COLUMNS = {
