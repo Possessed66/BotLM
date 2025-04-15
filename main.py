@@ -1041,18 +1041,24 @@ TEST_MODE = True  # Переключить на False для реальных у
 async def process_order_record(worksheet, stats_sheet, row_num, record):
     """Обработка одной записи с валидацией"""
     try:
-        chat_id = str(record[COLUMNS['chat_id']]).strip()  # Используем название столбца
+        # Проверка обязательных полей
+        required_fields = ['order_number', 'order_date', 'order_id']
+        missing = [field for field in required_fields if not record.get(COLUMNS[field])]
+        if missing:
+            raise KeyError(f"Отсутствуют поля: {', '.join(missing)}")
+        
+        chat_id = str(record[COLUMNS['chat_id']]).strip()
         # Валидация chat_id
         if not chat_id.isdigit():
             raise ValueError(f"Неверный Chat ID: {chat_id}")
         # Проверка тестового режима
         if TEST_MODE and chat_id not in map(str, ADMINS):
-            print(f"⚠️ Тестовый режим: пропуск {chat_id}")
+            logging.info(f"Тестовый режим: пропуск chat_id {chat_id}")
             return
         # Формирование сообщения
         message = (
-            f"📦 Заказ №{record[COLUMNS['order_number']]}"
-            f"🗓 Дата: {record[COLUMNS['order_date']]}"
+            f"📦 Заказ №{record[COLUMNS['order_number']]}\n"
+            f"🗓 Дата: {record[COLUMNS['order_date']]}\n"
             f"🔢 Номер заказа: {record[COLUMNS['order_id']]}"
         )
         # Добавляем пометку для тестового режима
@@ -1067,6 +1073,17 @@ async def process_order_record(worksheet, stats_sheet, row_num, record):
         except Exception as e:
             status = f"❌ Ошибка: {str(e)}"
             raise
+        except KeyError as e:
+        print(f"❌ Ошибка: {str(e)}")
+        # Логируем проблему
+        stats_sheet.append_row([
+            datetime.now().strftime("%d.%m.%Y %H:%M"),
+            "N/A",
+            chat_id,
+            f"❌ Критическая ошибка: {str(e)}"
+        ])
+        return
+    except Exception as e:
         # Логирование статистики
         stats_record = [
             datetime.now().strftime("%d.%m.%Y %H:%M"),
