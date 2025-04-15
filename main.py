@@ -975,11 +975,11 @@ CHECK_INTERVAL = 300  # 5 минут
 STATS_SHEET_NAME = "Статистика Уведомлений"
 
 COLUMNS = {
-    'order_number': 3,   # B
-    'order_date': 16,    # P
-    'order_id': 17,      # Q
-    'chat_id': 18,       # R 
-    'notified': 19       # S
+    'order_number': 'Причина заказа или № заказа клиента',   # Название столбца С
+    'order_date': 'Дата коммента МЗ',      # Название столбца P
+    'order_id': 'Комментарий МЗ \ № заказа',          # Название столбца Q
+    'chat_id': 'id_user',             # Название столбца R
+    'notified': 'Уведомление'            # Название столбца S
 }
 
 
@@ -1004,29 +1004,25 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
 async def check_orders_notifications():
     try:
-        print("🔥 Начало проверки уведомлений")
         spreadsheet = client.open(ORDERS_SPREADSHEET_NAME)
         stats_sheet = spreadsheet.worksheet(STATS_SHEET_NAME)
-        print(f"Лист статистики: {stats_sheet}")
-        
         for sheet_name in ORDERS_SHEET_NAMES:
             try:
                 worksheet = spreadsheet.worksheet(sheet_name)
-                print(f"обработка листа {sheet_name}")
                 records = worksheet.get_all_records()
+                # Используем названия столбцов из COLUMNS
                 filtered_records = [
                     r for r in records
-                    if r.get('order_date') and 
-                    r.get('order_id') and 
-                    r.get('chat_id') and 
-                    not r.get('notified')
+                    if (
+                        r.get(COLUMNS['order_date']) and  # Проверка "Дата заказа"
+                        r.get(COLUMNS['order_id']) and    # Проверка "ID заказа"
+                        r.get(COLUMNS['chat_id']) and     # Проверка "Chat ID"
+                        not r.get(COLUMNS['notified'])    # Проверка "Notified"
+                    )
                 ]
                 print(f"Найдено записей для обработки: {len(filtered_records)}")
-                
                 for idx, record in enumerate(filtered_records, start=2):
                     await process_order_record(worksheet, stats_sheet, idx, record)
-            except SpreadsheetNotFound:
-                print(f"⚠️ Лист {sheet_name} не найден")
             except Exception as e:
                 print(f"Ошибка в листе {sheet_name}: {str(e)}")
     except Exception as e:
@@ -1044,63 +1040,50 @@ TEST_MODE = True  # Переключить на False для реальных у
 #===================== ОСНОВНАЯ ЛОГИКА УВЕДОМЛЕНИЙ =====================
 async def process_order_record(worksheet, stats_sheet, row_num, record):
     """Обработка одной записи с валидацией"""
-    print(f"🔥 Начало обработки записи: {record}")  # Лог 1: Запуск обработки
     try:
-        chat_id = str(record['chat_id']).strip()
-        print(f"Chat ID: {chat_id}")  # Лог 2: Проверка chat_id
+        chat_id = str(record[COLUMNS['chat_id']]).strip()  # Используем название столбца
         # Валидация chat_id
         if not chat_id.isdigit():
-            print(f"❌ Неверный Chat ID: {chat_id}")  # Лог 3: Ошибка chat_id
             raise ValueError(f"Неверный Chat ID: {chat_id}")
         # Проверка тестового режима
         if TEST_MODE and chat_id not in map(str, ADMINS):
-            print(f"⚠️ Тестовый режим: пропуск {chat_id}")  # Лог 4: Тестовый режим
+            print(f"⚠️ Тестовый режим: пропуск {chat_id}")
             return
-        print("✅ Chat ID валиден и прошел проверку")  # Лог 5: Успех проверки
-        
         # Формирование сообщения
         message = (
-            f"📦 Заказ №{record['order_number']}\n"
-            f"🗓 Дата: {record['order_date']}\n"
-            f"🔢 Номер заказа: {record['order_id']}"
+            f"📦 Заказ №{record[COLUMNS['order_number']]}
+"
+            f"🗓 Дата: {record[COLUMNS['order_date']]}
+"
+            f"🔢 Номер заказа: {record[COLUMNS['order_id']]}"
         )
+        # Добавляем пометку для тестового режима
         if TEST_MODE:
             message = "[ТЕСТ] " + message
-        print(f"📩 Отправка сообщения: {message}")  # Лог 6: Формирование сообщения
-        
         # Отправка сообщения
         try:
             await bot.send_message(chat_id=int(chat_id), text=message)
             status = "✅ Успешно"
-            print(f"✅ Сообщение отправлено chat_id {chat_id}")  # Лог 7: Успех отправки
         except TelegramForbiddenError:
             status = "❌ Пользователь заблокировал бота"
-            print(f"❌ Пользователь {chat_id} заблокировал бота")  # Лог 8: Блокировка
         except Exception as e:
             status = f"❌ Ошибка: {str(e)}"
-            print(f"❌ Ошибка при отправке: {str(e)}")  # Лог 9: Ошибка отправки
             raise
-        
-        # Логирование в статистику
+        # Логирование статистики
         stats_record = [
             datetime.now().strftime("%d.%m.%Y %H:%M"),
-            record['order_number'],
+            record[COLUMNS['order_number']],
             chat_id,
             status
         ]
-        print(f"📊 Логирование: {stats_record}")  # Лог 10: Запись в статистику
         stats_sheet.append_row(stats_record)
-        
-        # Обновление статуса в таблице
-        worksheet.update_cell(row_num, COLUMNS['notified'], status.split(':')[0])
-        print(f"✅ Статус обновлен в строке {row_num}")  # Лог 11: Обновление таблицы
-        
+        # Обновление статуса в основном листе
+        worksheet.update_cell(row_num, 19, status.split(':')[0])  # Столбец S (индекс 19)
     except Exception as e:
-        print(f"❌ Критическая ошибка: {str(e)}")  # Лог 12: Критическая ошибка
-        logging.error(f"Ошибка обработки заказа {record['order_number']}: {str(e)}")
+        print(f"❌ Критическая ошибка: {str(e)}")
         stats_sheet.append_row([
             datetime.now().strftime("%d.%m.%Y %H:%M"),
-            record.get('order_number', 'N/A'),
+            record.get(COLUMNS['order_number'], 'N/A'),
             chat_id,
             f"❌ Критическая ошибка: {str(e)}"
         ])
