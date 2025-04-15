@@ -1039,7 +1039,7 @@ TEST_MODE = True  # Переключить на False для реальных у
 
 #===================== ОСНОВНАЯ ЛОГИКА УВЕДОМЛЕНИЙ =====================
 async def process_order_record(worksheet, stats_sheet, row_num, record):
-    """Обработка одной записи с валидацией"""
+    print(f"Обработка записи {row_num}: {record}")  # Лог структуры записи
     try:
         # Проверка обязательных полей
         required_fields = ['order_number', 'order_date', 'order_id']
