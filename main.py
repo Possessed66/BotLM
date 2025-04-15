@@ -1057,7 +1057,7 @@ async def process_order_record(worksheet, stats_sheet, row_num, record):
             return
         # Формирование сообщения
         message = (
-            f"📦 Ваш Заказ №{record[COLUMNS['order_number']] оформлен}\n"
+            f"📦Ваш Заказ №{record[COLUMNS['order_number']]} оформлен\n"
             f"🗓 Дата: {record[COLUMNS['order_date']]}\n"
             f"🔢 Номер заказа постащику/комментарий : {record[COLUMNS['order_id']]}"
         )
