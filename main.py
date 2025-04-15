@@ -1101,10 +1101,10 @@ async def process_order_record(worksheet, stats_sheet, row_num, record):
         print("✅ Статистика записана")
         
         # Обновление статуса в основном листе
-        status_code = status.split(':')[0][:2]  # Например, "✅" или "❌"
+        status_code = status.split(':')[0] if status else "❌ Неуспешно"  # Например, "✅" или "❌"
         print(f"🔄 Обновление S{row_num}: {status_code}")
         worksheet.update_cell(int(row_num), COLUMNS['notified'], status.split(':')[0])
-        print("✅ Статус обновлен")
+        print(f"✅ Статус обновлен в строке {row_num}, столбец S: {status_code}")
         
     except KeyError as e:
         print(f"❌ Ошибка: {str(e)}")
