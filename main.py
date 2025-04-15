@@ -1057,9 +1057,9 @@ async def process_order_record(worksheet, stats_sheet, row_num, record):
             return
         # Формирование сообщения
         message = (
-            f"📦 Заказ №{record[COLUMNS['order_number']]}\n"
+            f"📦 Ваш Заказ №{record[COLUMNS['order_number']] оформлен}\n"
             f"🗓 Дата: {record[COLUMNS['order_date']]}\n"
-            f"🔢 Номер заказа: {record[COLUMNS['order_id']]}"
+            f"🔢 Номер заказа постащику/комментарий : {record[COLUMNS['order_id']]}"
         )
         # Добавляем пометку для тестового режима
         if TEST_MODE:
@@ -1084,24 +1084,42 @@ async def process_order_record(worksheet, stats_sheet, row_num, record):
         ])
         return
     except Exception as e:
+        
+        
         # Логирование статистики
         stats_record = [
             datetime.now().strftime("%d.%m.%Y %H:%M"),
-            record[COLUMNS['order_number']],
+            record[COLUMNS['order_number']],  # Используйте COLUMNS!
             chat_id,
             status
         ]
         stats_sheet.append_row(stats_record)
+        print("✅ Статистика записана")
+        
         # Обновление статуса в основном листе
-        worksheet.update_cell(row_num, 19, status.split(':')[0])  # Столбец S (индекс 19)
+        status_code = status.split(':')[0][:2]  # Например, "✅" или "❌"
+        print(f"🔄 Обновление S{row_num}: {status_code}")
+        worksheet.update_cell(row_num, COLUMNS['notified'], status_code)
+        print("✅ Статус обновлен")
+        
+    except KeyError as e:
+        print(f"❌ Ошибка: {str(e)}")
+        stats_sheet.append_row([
+            datetime.now().strftime("%d.%m.%Y %H:%M"),
+            "N/A",
+            chat_id,
+            f"❌ Критическая ошибка: {str(e)}"
+        ])
+        return
     except Exception as e:
-        print(f"❌ Критическая ошибка: {str(e)}")
+        print(f"❌ Ошибка: {str(e)}")
         stats_sheet.append_row([
             datetime.now().strftime("%d.%m.%Y %H:%M"),
             record.get(COLUMNS['order_number'], 'N/A'),
             chat_id,
-            f"❌ Критическая ошибка: {str(e)}"
+            f"❌ Ошибка: {str(e)}"
         ])
+        return
 
 # ===================== ОБЩАЯ ЛОГИКА ЗАПУСКА =====================
 async def scheduled_cache_update():
