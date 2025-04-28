@@ -585,10 +585,20 @@ async def process_article(message: types.Message, state: FSMContext):
     await state.update_data(article=article)    
     await message.answer(
         "📌 Выберите магазин для заказа:",
-        reply_markup=builder.as_markup(resize_keyboard=True)
+        reply_markup=shop_selection_keyboard()
     )
     await state.set_state(OrderStates.shop_selection)
 
+
+@dp.message(OrderStates.shop_input)
+async def process_custom_shop(message: types.Message, state: FSMContext):
+    shop = message.text.strip()
+    if not shop.isdigit() or shop.startswith('0'):
+        await message.answer("❗ Номер магазина должен быть целым числом без ведущих нулей. Повторите ввод:")
+        return
+    await state.update_data(selected_shop=shop)
+    await message.answer("✅ Магазин выбран", reply_markup=ReplyKeyboardRemove())
+    await process_article_continuation(message, state)
 
 @dp.message(OrderStates.shop_selection)
 async def process_shop_selection(message: types.Message, state: FSMContext):
@@ -621,16 +631,6 @@ async def process_shop_selection(message: types.Message, state: FSMContext):
     await state.update_data(selected_shop=selected_shop)
     
     # Продолжаем процесс оформления заказа
-    await process_article_continuation(message, state)
-
-@dp.message(OrderStates.shop_input)
-async def process_custom_shop(message: types.Message, state: FSMContext):
-    shop = message.text.strip()
-    if not shop.isdigit() or shop.startswith('0'):
-        await message.answer("❗ Номер магазина должен быть целым числом без ведущих нулей. Повторите ввод:")
-        return
-    await state.update_data(selected_shop=shop)
-    await message.answer("✅ Магазин выбран", reply_markup=ReplyKeyboardRemove())
     await process_article_continuation(message, state)
 
 
