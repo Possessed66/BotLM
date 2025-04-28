@@ -572,6 +572,28 @@ async def handle_client_order(message: types.Message, state: FSMContext):
     await message.answer("🔢 Введите артикул товара:", reply_markup=article_input_keyboard())
     await state.set_state(OrderStates.article_input)
 
+@dp.message(OrderStates.shop_input)
+async def process_custom_shop(message: types.Message, state: FSMContext):
+    shop = message.text.strip()
+    if not shop.isdigit() or shop.startswith('0'):
+        await message.answer("❗ Номер магазина должен быть целым числом без ведущих нулей. Повторите ввод:")
+        return
+    await state.update_data(selected_shop=shop)
+    await message.answer("✅ Магазин выбран", reply_markup=ReplyKeyboardRemove())
+    await process_article_continuation(message, state)
+
+
+async def process_article_continuation(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    article = data.get('article')
+    selected_shop = data.get('selected_shop')
+    
+    product_info = await get_product_info(article, selected_shop)
+    if not product_info:
+        await message.answer("❌ Товар не найден в выбранном магазине")
+        await state.clear()
+        return
+
 
 @dp.message(OrderStates.article_input)
 async def process_article(message: types.Message, state: FSMContext):
@@ -593,37 +615,39 @@ async def process_article(message: types.Message, state: FSMContext):
 
 @dp.message(OrderStates.shop_selection)
 async def process_shop_selection(message: types.Message, state: FSMContext):
-    data = await state.get_data()
     user_data = await get_user_data(str(message.from_user.id))
     
     if message.text == "Использовать мой магазин":
         selected_shop = user_data['shop']
     elif message.text == "Выбрать другой":
-        await message.answer("🏪 Введите номер магазина:", reply_markup=ReplyKeyboardRemove())
+        await message.answer(
+            "🏪 Введите номер магазина (только цифры, без ведущих нулей):",
+            reply_markup=ReplyKeyboardRemove()
+        )
         await state.set_state(OrderStates.shop_input)
         return
+    elif message.text == "❌ Отмена":
+        await message.answer(
+            "❌ Выбор отменен",
+            reply_markup=main_menu_keyboard()
+        )
+        await state.clear()
+        return
     else:
-        await message.answer("❌ Неверный выбор, попробуйте снова")
+        await message.answer(
+            "❌ Неверный выбор. Используйте кнопки меню",
+            reply_markup=shop_selection_keyboard()
+        )
         return
     
+    # Сохраняем выбранный магазин в FSM
     await state.update_data(selected_shop=selected_shop)
-    await process_article_continuation(message, state)
-
-
-@dp.message(OrderStates.shop_input)
-async def process_custom_shop(message: types.Message, state: FSMContext):
-    if not message.text.strip().isdigit():
-        await message.answer("❌ Номер магазина должен быть числом! Повторите ввод:")
-        return
     
-    await state.update_data(selected_shop=message.text.strip())
+    # Продолжаем процесс оформления заказа
     await process_article_continuation(message, state)
-async def process_article_continuation(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    product_info = await get_product_info(article, user_shop)
-    if not product_info:
-        await message.answer("❌ Товар не найден")
-        return
+
+
+
 
     response = (
         f"Магазин: {user_shop}\n"
@@ -704,9 +728,10 @@ async def process_order_reason(message: types.Message, state: FSMContext):
 async def final_confirmation(message: types.Message, state: FSMContext):
     await state.update_data(last_activity=datetime.now().isoformat())
     data = await state.get_data()
+    selected_shop = data['selected_shop']
     try:
         # Проверка обязательных полей
-        required_fields = ['shop', 'article', 'order_reason', 'quantity', 'department']
+        required_fields = ['selected_shop', 'article', 'order_reason', 'quantity', 'department']
         for field in required_fields:
             if not data.get(field):
                 raise ValueError(f"Отсутствует обязательное поле: {field}")
@@ -723,7 +748,7 @@ async def final_confirmation(message: types.Message, state: FSMContext):
 
         # Формируем обновления
         updates = [
-            {'range': f'A{next_row}', 'values': [[data['selected_shop']]]},
+            {'range': f'A{next_row}', 'values': [[selected_shop]]},
             {'range': f'B{next_row}', 'values': [[int(data['article'])]]},
             {'range': f'C{next_row}', 'values': [[data['order_reason']]]},
             {'range': f'D{next_row}', 'values': [[datetime.now().strftime("%d.%m.%Y %H:%M")]]},
