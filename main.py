@@ -28,7 +28,7 @@ logging.basicConfig(
 )
 
 # ===================== КОНФИГУРАЦИЯ СЕРВИСНОГО РЕЖИМА =====================
-SERVICE_MODE = False
+SERVICE_MODE = True
 ADMINS = [122086799]  # ID администраторов
 
 # ===================== КОНФИГУРАЦИЯ КЭША =====================
@@ -103,6 +103,7 @@ class Registration(StatesGroup):
 
 class OrderStates(StatesGroup):
     article_input = State()
+    shop_selection = State()  # Новое состояние для выбора магазина
     quantity_input = State()
     confirmation = State()
     order_reason_input = State()
@@ -172,6 +173,13 @@ def broadcast_confirmation_keyboard():
     builder.adjust(1, 2)
     return builder.as_markup(resize_keyboard=True)
 
+def shop_selection_keyboard():
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="Использовать мой магазин")
+    builder.button(text="Выбрать другой")
+    builder.button(text="❌ Отмена")
+    builder.adjust(2, 1)
+    return builder.as_markup(resize_keyboard=True)
 
 # ===================== СЕРВИСНЫЙ РЕЖИМ =====================
 async def notify_admins(message: str):
@@ -431,14 +439,14 @@ def calculate_delivery_date(supplier_data: dict) -> tuple:
 
 
 # ========================== ПАРСЕР ===========================
-async def get_product_info(article: str, user_shop: str) -> dict:
+async def get_product_info(article: str, shop: str) -> dict:
     """Получение информации о товаре по артикулу"""
     try:
         gamma_data = cache.get("gamma_cluster", [])
         product_data = next(
             (item for item in gamma_data
              if str(item.get("Артикул", "")).strip() == str(article).strip()
-             and str(item.get("Магазин", "")).strip() == str(user_shop).strip()),
+             and str(item.get("Магазин", "")).strip() == str(shop).strip()),
             None
         )
         
@@ -446,7 +454,7 @@ async def get_product_info(article: str, user_shop: str) -> dict:
             return None
 
         supplier_id = str(product_data.get("Номер осн. пост.", "")).strip()
-        supplier_sheet = get_supplier_dates_sheet(user_shop)
+        supplier_sheet = get_supplier_dates_sheet(shop)
         supplier_data = next(
             (item for item in supplier_sheet.data 
              if str(item.get("Номер осн. пост.", "")).strip() == supplier_id),
@@ -475,7 +483,7 @@ async def get_product_info(article: str, user_shop: str) -> dict:
             'delivery_date': delivery_date,
             'supplier_id': supplier_id,
             'supplier_name': supplier_name,  # Новое поле
-            'shop': user_shop,
+            'shop': shop,
             'parsed_supplier': parsed_supplier
         }
         
@@ -567,11 +575,51 @@ async def handle_client_order(message: types.Message, state: FSMContext):
 
 @dp.message(OrderStates.article_input)
 async def process_article(message: types.Message, state: FSMContext):
-    await state.update_data(last_activity=datetime.now().isoformat())
     article = message.text.strip()
-    data = await state.get_data()
-    user_shop = data['shop']
+    await state.update_data(article=article)
     
+    # Предлагаем выбрать магазин
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="Использовать мой магазин")
+    builder.button(text="Выбрать другой")
+    builder.adjust(2)
+    
+    await message.answer(
+        "📌 Выберите магазин для заказа:",
+        reply_markup=builder.as_markup(resize_keyboard=True)
+    )
+    await state.set_state(OrderStates.shop_selection)
+
+
+@dp.message(OrderStates.shop_selection)
+async def process_shop_selection(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    user_data = await get_user_data(str(message.from_user.id))
+    
+    if message.text == "Использовать мой магазин":
+        selected_shop = user_data['shop']
+    elif message.text == "Выбрать другой":
+        await message.answer("🏪 Введите номер магазина:", reply_markup=ReplyKeyboardRemove())
+        await state.set_state(OrderStates.shop_input)
+        return
+    else:
+        await message.answer("❌ Неверный выбор, попробуйте снова")
+        return
+    
+    await state.update_data(selected_shop=selected_shop)
+    await process_article_continuation(message, state)
+
+
+@dp.message(OrderStates.shop_input)
+async def process_custom_shop(message: types.Message, state: FSMContext):
+    if not message.text.strip().isdigit():
+        await message.answer("❌ Номер магазина должен быть числом! Повторите ввод:")
+        return
+    
+    await state.update_data(selected_shop=message.text.strip())
+    await process_article_continuation(message, state)
+async def process_article_continuation(message: types.Message, state: FSMContext):
+    data = await state.get_data()
     product_info = await get_product_info(article, user_shop)
     if not product_info:
         await message.answer("❌ Товар не найден")
@@ -675,7 +723,7 @@ async def final_confirmation(message: types.Message, state: FSMContext):
 
         # Формируем обновления
         updates = [
-            {'range': f'A{next_row}', 'values': [[data['shop']]]},
+            {'range': f'A{next_row}', 'values': [[data['selected_shop']]]},
             {'range': f'B{next_row}', 'values': [[int(data['article'])]]},
             {'range': f'C{next_row}', 'values': [[data['order_reason']]]},
             {'range': f'D{next_row}', 'values': [[datetime.now().strftime("%d.%m.%Y %H:%M")]]},
@@ -707,6 +755,11 @@ async def cancel_order(message: types.Message, state: FSMContext):
     # Показываем главное меню
     await message.answer("❌ Операция отменена.", reply_markup=main_menu_keyboard())
 
+@dp.message(OrderStates.shop_selection, F.text == "❌ Отмена")
+@dp.message(OrderStates.shop_input, F.text == "❌ Отмена")
+async def cancel_shop_selection(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("❌ Выбор магазина отменён", reply_markup=main_menu_keyboard())
 
 @dp.message(OrderStates.article_input, F.text == "❌ Отмена")
 async def cancel_order_process(message: types.Message, state: FSMContext):
@@ -750,7 +803,7 @@ async def process_info_request(message: types.Message, state: FSMContext):
 
     response = (
         f"🔍 Информация о товаре:\n"
-        f"Магазин: {user_shop}\n"
+        f"Магазин: {shop}\n"
         f"📦Артикул: {product_info['article']}\n"
         f"🏷️Название: {product_info['product_name']}\n"
         f"🔢Отдел: {product_info['department']}\n"
