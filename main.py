@@ -561,15 +561,23 @@ async def process_shop(message: types.Message, state: FSMContext):
 async def handle_client_order(message: types.Message, state: FSMContext):
     await state.update_data(last_activity=datetime.now().isoformat())
     user_data = await get_user_data(str(message.from_user.id))
+    
     if not user_data:
         await message.answer("❌ Сначала пройдите регистрацию через /start")
         return
-        
+    
     await state.update_data(
         shop=user_data['shop'],
         user_name=user_data['name'],
         user_position=user_data['position']
     )
+    
+    # Важные строки:
+    await message.answer(
+        "🔢 Введите артикул товара:",
+        reply_markup=article_input_keyboard()
+    )
+    await state.set_state(OrderStates.article_input)  # Установка состояния
     
 @dp.message(OrderStates.article_input)
 async def process_article(message: types.Message, state: FSMContext):
@@ -614,9 +622,6 @@ async def process_shop_selection(message: types.Message, state: FSMContext):
     
     # Продолжаем процесс оформления заказа
     await process_article_continuation(message, state)
-
-    await message.answer("🔢 Введите артикул товара:", reply_markup=article_input_keyboard())
-    await state.set_state(OrderStates.article_input)
 
 @dp.message(OrderStates.shop_input)
 async def process_custom_shop(message: types.Message, state: FSMContext):
