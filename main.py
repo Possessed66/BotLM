@@ -570,43 +570,11 @@ async def handle_client_order(message: types.Message, state: FSMContext):
         user_name=user_data['name'],
         user_position=user_data['position']
     )
-    await message.answer("🔢 Введите артикул товара:", reply_markup=article_input_keyboard())
-    await state.set_state(OrderStates.article_input)
-
-@dp.message(OrderStates.shop_input)
-async def process_custom_shop(message: types.Message, state: FSMContext):
-    shop = message.text.strip()
-    if not shop.isdigit() or shop.startswith('0'):
-        await message.answer("❗ Номер магазина должен быть целым числом без ведущих нулей. Повторите ввод:")
-        return
-    await state.update_data(selected_shop=shop)
-    await message.answer("✅ Магазин выбран", reply_markup=ReplyKeyboardRemove())
-    await process_article_continuation(message, state)
-
-
-async def process_article_continuation(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    article = data.get('article')
-    selected_shop = data.get('selected_shop')
     
-    product_info = await get_product_info(article, selected_shop)
-    if not product_info:
-        await message.answer("❌ Товар не найден в выбранном магазине")
-        await state.clear()
-        return
-
-
 @dp.message(OrderStates.article_input)
 async def process_article(message: types.Message, state: FSMContext):
     article = message.text.strip()
-    await state.update_data(article=article)
-    
-    # Предлагаем выбрать магазин
-    builder = ReplyKeyboardBuilder()
-    builder.button(text="Использовать мой магазин")
-    builder.button(text="Выбрать другой")
-    builder.adjust(2)
-    
+    await state.update_data(article=article)    
     await message.answer(
         "📌 Выберите магазин для заказа:",
         reply_markup=builder.as_markup(resize_keyboard=True)
@@ -647,8 +615,30 @@ async def process_shop_selection(message: types.Message, state: FSMContext):
     # Продолжаем процесс оформления заказа
     await process_article_continuation(message, state)
 
+    await message.answer("🔢 Введите артикул товара:", reply_markup=article_input_keyboard())
+    await state.set_state(OrderStates.article_input)
+
+@dp.message(OrderStates.shop_input)
+async def process_custom_shop(message: types.Message, state: FSMContext):
+    shop = message.text.strip()
+    if not shop.isdigit() or shop.startswith('0'):
+        await message.answer("❗ Номер магазина должен быть целым числом без ведущих нулей. Повторите ввод:")
+        return
+    await state.update_data(selected_shop=shop)
+    await message.answer("✅ Магазин выбран", reply_markup=ReplyKeyboardRemove())
+    await process_article_continuation(message, state)
 
 
+async def process_article_continuation(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    article = data.get('article')
+    selected_shop = data.get('selected_shop')
+    
+    product_info = await get_product_info(article, selected_shop)
+    if not product_info:
+        await message.answer("❌ Товар не найден в выбранном магазине")
+        await state.clear()
+        return
 
     response = (
         f"Магазин: {selected_shop}\n"
@@ -707,12 +697,12 @@ async def process_order_reason(message: types.Message, state: FSMContext):
     await state.update_data(last_activity=datetime.now().isoformat())
     data = await state.get_data()
     order_reason = message.text.strip()
-    user_shop = data['shop']
+    selected_shop = data.get('selected_shop')
     # Обновляем состояние
     await state.update_data(order_reason=order_reason)
     # Вывод информации для подтверждения
     await message.answer(
-        f"Магазин: {user_shop}\n"
+        f"Магазин: {selected_shop}\n"
         f"📦 Артикул: {data['article']}\n"
         f"🏷️ Название: {data['product_name']}\n"
         f"🏭 Поставщик: {data['supplier_name']}\n" 
