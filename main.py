@@ -651,7 +651,7 @@ async def process_shop_selection(message: types.Message, state: FSMContext):
 
 
     response = (
-        f"Магазин: {user_shop}\n"
+        f"Магазин: {selected_shop}\n"
         f"📦 Артикул: {product_info['article']}\n"
         f"🏷️ Название: {product_info['product_name']}\n"
         f"🏭 Поставщик: {product_info['supplier_name']}\n" 
