@@ -104,6 +104,7 @@ class Registration(StatesGroup):
 class OrderStates(StatesGroup):
     article_input = State()
     shop_selection = State()  # Новое состояние для выбора магазина
+    shop_input = State() 
     quantity_input = State()
     confirmation = State()
     order_reason_input = State()
