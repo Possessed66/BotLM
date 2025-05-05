@@ -749,7 +749,7 @@ async def final_confirmation(message: types.Message, state: FSMContext):
             {'range': f'C{next_row}', 'values': [[data['order_reason']]]},
             {'range': f'D{next_row}', 'values': [[datetime.now().strftime("%d.%m.%Y %H:%M")]]},
             {'range': f'E{next_row}', 'values': [[f"{data['user_name']}, {data['user_position']}"]]},
-            {'range': f'K{next_row}', 'values': [[int(data['quantity'])]]},
+            {'range': f'K{next_row}', 'values': [[data['quantity']]]},
             {'range': f'R{next_row}', 'values': [[int(message.from_user.id)]]}
         ]
 
