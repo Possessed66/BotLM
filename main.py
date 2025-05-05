@@ -729,7 +729,7 @@ async def final_confirmation(message: types.Message, state: FSMContext):
         # Проверка обязательных полей
         required_fields = ['selected_shop', 'article', 'order_reason', 'quantity', 'department']
         for field in required_fields:
-            if not data.get(field):
+            if data.get(field) is None:
                 raise ValueError(f"Отсутствует обязательное поле: {field}")
 
         # Получаем лист отдела
@@ -749,7 +749,7 @@ async def final_confirmation(message: types.Message, state: FSMContext):
             {'range': f'C{next_row}', 'values': [[data['order_reason']]]},
             {'range': f'D{next_row}', 'values': [[datetime.now().strftime("%d.%m.%Y %H:%M")]]},
             {'range': f'E{next_row}', 'values': [[f"{data['user_name']}, {data['user_position']}"]]},
-            {'range': f'K{next_row}', 'values': [[data['quantity']]]},
+            {'range': f'K{next_row}', 'values': [[int(data['quantity'])]]},
             {'range': f'R{next_row}', 'values': [[int(message.from_user.id)]]}
         ]
 
