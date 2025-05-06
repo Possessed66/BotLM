@@ -377,21 +377,20 @@ async def timeout_middleware(handler, event, data):
             last_activity_str = state_data.get('last_activity')
 
             # Обработка времени активности
-            if last_activity_str:
-                try:
-                    last_activity = datetime.fromisoformat(last_activity_str)
-                except ValueError:
-                    last_activity = datetime.min
-            else:
+            try:
+                last_activity = datetime.fromisoformat(last_activity_str)
+            except (ValueError, TypeError):
                 last_activity = datetime.min
+                logging.warning(f"Invalid last_activity format for user {event.from_user.id}")
 
-            if datetime.now() - last_activity > timedelta(minutes=15):
+            # Проверка таймаута (30 минут)
+            if datetime.now() - last_activity > timedelta(minutes=20):
                 await state.clear()
                 if isinstance(event, (types.Message, types.CallbackQuery)):
                     await event.answer("🕒 Сессия истекла. Начните заново.")
                 return
 
-            # Обновляем время активности
+            # Обновление времени активности
             await state.update_data(last_activity=datetime.now().isoformat())
 
     return await handler(event, data)
