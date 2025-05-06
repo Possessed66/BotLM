@@ -999,7 +999,7 @@ async def confirm_broadcast(message: types.Message, state: FSMContext):
     data = await state.get_data()
     content = data['content']
     target = data.get('target', 'all')
-    user_id = data.get('user_id')
+    user_ids = data.get('user_ids')
     # Записываем в логи
     logs_sheet.append_row([
         datetime.now().strftime("%d.%m.%Y %H:%M"),
@@ -1009,7 +1009,7 @@ async def confirm_broadcast(message: types.Message, state: FSMContext):
     ])
     await message.answer("🔄 Начинаю рассылку...", reply_markup=main_menu_keyboard())
     # Асинхронная рассылка
-    asyncio.create_task(send_broadcast(content, target, user_id))
+    asyncio.create_task(send_broadcast(content, target, user_ids))
     await state.clear()
 
 async def send_broadcast(content: dict, target: str, user_ids: list = None):
