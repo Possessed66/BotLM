@@ -360,19 +360,28 @@ async def timeout_middleware(handler, event, data):
     if state:
         current_state = await state.get_state()
         if current_state:
-            # Получаем время последней активности из хранилища
             state_data = await state.get_data()
             last_activity_str = state_data.get('last_activity')
-            
+
+            # Обработка времени активности
             if last_activity_str:
-                last_activity = datetime.fromisoformat(last_activity_str)
-                if datetime.now() - last_activity > timedelta(minutes=15):
-                    await state.clear()
+                try:
+                    last_activity = datetime.fromisoformat(last_activity_str)
+                except ValueError:
+                    last_activity = datetime.min
+            else:
+                last_activity = datetime.min
+
+            if datetime.now() - last_activity > timedelta(minutes=15):
+                await state.clear()
+                if isinstance(event, (types.Message, types.CallbackQuery)):
                     await event.answer("🕒 Сессия истекла. Начните заново.")
-                    return
-            
+                return
+
             # Обновляем время активности
             await state.update_data(last_activity=datetime.now().isoformat())
+
+    return await handler(event, data)
     
     return await handler(event, data)
 
@@ -1045,7 +1054,7 @@ async def initialize_stats_sheet():
 
 # ===================== КОНФИГУРАЦИЯ УВЕДОМЛЕНИЙ =====================
 ORDERS_SHEET_NAMES = [str(i) for i in range(1, 16)]
-CHECK_INTERVAL = 1800  # 30 минут
+CHECK_INTERVAL = 3600  # 60 минут
 STATS_SHEET_NAME = "Статистика Уведомлений"
 
 COLUMNS = {
