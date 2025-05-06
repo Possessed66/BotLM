@@ -116,8 +116,9 @@ class InfoRequest(StatesGroup):
 
 class AdminBroadcast(StatesGroup):
     message_input = State()
+    target_selection = State()
+    manual_ids = State()  # Новое состояние для ввода списка ID
     confirmation = State()
-
 
 # ===================== ВСПОМОГАТЕЛЬНЫЙ КЛАСС =====================
 class FakeSheet:
@@ -174,6 +175,7 @@ def broadcast_confirmation_keyboard():
     builder.adjust(1, 2)
     return builder.as_markup(resize_keyboard=True)
 
+
 def shop_selection_keyboard():
     builder = ReplyKeyboardBuilder()
     builder.button(text="Использовать мой магазин")
@@ -181,6 +183,17 @@ def shop_selection_keyboard():
     builder.button(text="❌ Отмена")
     builder.adjust(2, 1)
     return builder.as_markup(resize_keyboard=True)
+
+
+def target_selection_keyboard():
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="Всем")
+    builder.button(text="Вручную")
+    builder.button(text="❌ Отмена")
+    builder.adjust(2)
+    return builder.as_markup(resize_keyboard=True)
+
+
 
 # ===================== СЕРВИСНЫЙ РЕЖИМ =====================
 async def notify_admins(message: str):
@@ -383,7 +396,6 @@ async def timeout_middleware(handler, event, data):
 
     return await handler(event, data)
     
-    return await handler(event, data)
 
 # ===================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====================
 async def get_user_data(user_id: str) -> Dict[str, Any]:
@@ -912,12 +924,12 @@ async def check_cache(message: types.Message):
 #===========================Рассылка==================================
 
 
+# ===================== РАССЫЛКА =====================
 @dp.message(Command("broadcast"))
 async def start_broadcast(message: types.Message, state: FSMContext):
     await state.update_data(last_activity=datetime.now().isoformat())
     if message.from_user.id not in ADMINS:
         return
-    
     await message.answer(
         "📢 Введите сообщение для рассылки (можно с медиа-вложениями):",
         reply_markup=types.ReplyKeyboardRemove()
@@ -932,7 +944,6 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
         'media': None,
         'type': 'text'
     }
-
     if message.photo:
         content.update({
             'type': 'photo',
@@ -945,19 +956,42 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
             'media': message.document.file_id,
             'caption': message.caption
         })
-
     await state.update_data(content=content)
-    
-    preview_text = "✉️ Предпросмотр сообщения:\n\n"
+    # Предпросмотр сообщения
+    preview_text = "✉️ Предпросмотр сообщения:\n"
     if content['type'] == 'text':
         preview_text += content['text']
     else:
         preview_text += f"[{content['type'].upper()}] {content.get('caption', '')}"
-
     await message.answer(
         preview_text,
-        reply_markup=broadcast_confirmation_keyboard()
+        reply_markup=target_selection_keyboard()  # Клавиатура выбора целевой аудитории
     )
+    await state.set_state(AdminBroadcast.target_selection)
+
+@dp.message(AdminBroadcast.target_selection)
+async def handle_target_selection(message: types.Message, state: FSMContext):
+    if message.text == "Всем":
+        await state.update_data(target="all")
+        await message.answer("✅ Отправить всем пользователям", reply_markup=broadcast_confirmation_keyboard())
+        await state.set_state(AdminBroadcast.confirmation)
+    elif message.text == "Вручную":
+        await message.answer("🔢 Введите ID пользователей через запятую:")
+        await state.set_state(AdminBroadcast.manual_ids)
+    elif message.text == "❌ Отмена":
+        await state.clear()
+        await message.answer("❌ Рассылка отменена", reply_markup=main_menu_keyboard())
+    else:
+        await message.answer("❌ Неверный выбор. Пожалуйста, используйте кнопки.", reply_markup=target_selection_keyboard())
+
+@dp.message(AdminBroadcast.manual_ids)
+async def process_manual_ids(message: types.Message, state: FSMContext):
+    user_ids = [id.strip() for id in message.text.split(",") if id.strip().isdigit()]
+    if not user_ids:
+        await message.answer("❌ Неверный формат ID. Повторите ввод:")
+        return
+    await state.update_data(target="manual", user_ids=user_ids)
+    await message.answer("✅ ID пользователей введены", reply_markup=broadcast_confirmation_keyboard())
     await state.set_state(AdminBroadcast.confirmation)
 
 @dp.message(AdminBroadcast.confirmation, F.text == "✅ Подтвердить рассылку")
@@ -965,7 +999,8 @@ async def confirm_broadcast(message: types.Message, state: FSMContext):
     await state.update_data(last_activity=datetime.now().isoformat())
     data = await state.get_data()
     content = data['content']
-    
+    target = data.get('target', 'all')
+    user_id = data.get('user_id')
     # Записываем в логи
     logs_sheet.append_row([
         datetime.now().strftime("%d.%m.%Y %H:%M"),
@@ -973,19 +1008,21 @@ async def confirm_broadcast(message: types.Message, state: FSMContext):
         "BROADCAST",
         f"Type: {content['type']}, Chars: {len(content.get('text', '') or content.get('caption', ''))}"
     ])
-    
     await message.answer("🔄 Начинаю рассылку...", reply_markup=main_menu_keyboard())
-    
     # Асинхронная рассылка
-    asyncio.create_task(send_broadcast(content))
-    
+    asyncio.create_task(send_broadcast(content, target, user_id))
     await state.clear()
 
-async def send_broadcast(content: dict):
-    users = users_sheet.col_values(1)[1:]  # ID из колонки A
+async def send_broadcast(content: dict, target: str, user_ids: list = None):
+    if target == "all":
+        users = users_sheet.col_values(1)[1:]  # ID из колонки A
+    elif target == "manual":
+        users = user_ids  # Используем список ID
+    else:
+        users = []
+
     success = 0
     failed = 0
-    
     for user_id in users:
         try:
             if content['type'] == 'text':
@@ -1013,25 +1050,11 @@ async def send_broadcast(content: dict):
         except Exception as e:
             failed += 1
             logging.error(f"Broadcast error to {user_id}: {str(e)}")
-    
     # Отправляем отчет админу
     await bot.send_message(
         chat_id=ADMINS[0],
-        text=f"📊 Результаты рассылки:\n\n✅ Успешно: {success}\n❌ Не удалось: {failed}"
+        text=f"📊 Результаты рассылки:\n✅ Успешно: {success}\n❌ Не удалось: {failed}"
     )
-
-# Добавить в существующий код
-@dp.message(AdminBroadcast.confirmation, F.text == "❌ Отменить рассылку")
-async def cancel_broadcast(message: types.Message, state: FSMContext):
-    await state.clear()
-    await message.answer("❌ Рассылка отменена", reply_markup=main_menu_keyboard())
-
-@dp.message(AdminBroadcast.confirmation, F.text == "✏️ Редактировать сообщение")
-async def edit_broadcast(message: types.Message, state: FSMContext):
-    await message.answer("📝 Введите новое сообщение:", reply_markup=types.ReplyKeyboardRemove())  
-    await state.set_state(AdminBroadcast.message_input)
-
-
 
 
 
