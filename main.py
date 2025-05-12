@@ -290,7 +290,7 @@ async def get_stats(message: types.Message):
         records = stats_sheet.get_all_records()
         
         total = len(records)
-        success = len([r for r in records if '✅' in r['Status']])
+        success = len([r for r in records if '✅' in r['Статус']])
         failed = total - success
         
         response = (
@@ -302,7 +302,7 @@ async def get_stats(message: types.Message):
         )
         
         for r in records[-5:]:
-            if '❌' in r['Status']:
+            if '❌' in r['Статус']:
                 response += f"\n- {r['Date']}: {r['Status']}"
                 
         await message.answer(response)
