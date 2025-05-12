@@ -50,7 +50,7 @@ except KeyError as e:
 # Преобразуем GOOGLE_CREDENTIALS из строки в объект
 GOOGLE_CREDS = json.loads(GOOGLE_CREDS_JSON)
 SPREADSHEET_NAME = "ShopBotData"
-STATS_SHEET_NAME = "Статистика_Пользователей"
+STATSS_SHEET_NAME = "Статистика_Пользователей"
 ORDERS_SPREADSHEET_NAME = "Копия Заказы МЗ 0.2"
 USERS_SHEET_NAME = "Пользователи"
 GAMMA_CLUSTER_SHEET = "Гамма кластер"
@@ -1078,7 +1078,7 @@ async def log_user_activity(user_id: str, command: str, event_type: str = "comma
         if not user_data:
             return
             
-        stats_sheet = main_spreadsheet.worksheet(STATS_SHEET_NAME)
+        stats_sheet = main_spreadsheet.worksheet(STATSS_SHEET_NAME)
         stats_sheet.append_row([
             datetime.now().strftime("%d.%m.%Y"),
             datetime.now().strftime("%H:%M:%S"),
