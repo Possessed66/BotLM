@@ -50,6 +50,7 @@ except KeyError as e:
 # Преобразуем GOOGLE_CREDENTIALS из строки в объект
 GOOGLE_CREDS = json.loads(GOOGLE_CREDS_JSON)
 SPREADSHEET_NAME = "ShopBotData"
+STATS_SHEET_NAME = "Статистика_Пользователей"
 ORDERS_SPREADSHEET_NAME = "Копия Заказы МЗ 0.2"
 USERS_SHEET_NAME = "Пользователи"
 GAMMA_CLUSTER_SHEET = "Гамма кластер"
@@ -527,6 +528,7 @@ async def start_handler(message: types.Message, state: FSMContext):
     await message.answer(
         "👋 Добро пожаловать! Введите ваше имя:", reply_markup=types.ReplyKeyboardRemove()
     )
+    await log_user_activity(message.from_user.id, "/start", "registration")
     await state.set_state(Registration.name)
 
 
@@ -597,6 +599,7 @@ async def handle_client_order(message: types.Message, state: FSMContext):
         "🔢 Введите артикул товара:",
         reply_markup=article_input_keyboard()
     )
+    await log_user_activity(message.from_user.id, "заказ", "order", "Заказ под клиента")
     await state.set_state(OrderStates.article_input)  # Установка состояния
     
 @dp.message(OrderStates.article_input)
@@ -776,6 +779,7 @@ async def final_confirmation(message: types.Message, state: FSMContext):
         # Записываем данные
         department_sheet.batch_update(updates)
         await message.answer("✅ Заказ успешно сохранен!", reply_markup=main_menu_keyboard())
+        await log_user_activity(message.from_user.id, Подтвердить)
         await state.clear()
 
     except Exception as e:
@@ -819,6 +823,7 @@ async def cancel_order_process(message: types.Message, state: FSMContext):
 @dp.message(F.text == "📋 Запрос информации")
 async def handle_info_request(message: types.Message, state: FSMContext):
     await state.update_data(last_activity=datetime.now().isoformat())
+    await log_user_activity(message.from_user.id, "запрос", "info")
     user_data = await get_user_data(str(message.from_user.id))
     if not user_data:
         await message.answer("❌ Сначала пройдите регистрацию через /start")
@@ -1057,20 +1062,37 @@ async def send_broadcast(content: dict, target: str, user_ids: list = None):
 
 
 
-#=============================УВЕДОМЛЕНИЯ=========================
+
+#================================Статистика==========================================#
 
 
+STATS_COLUMNS = [
+    "Дата", "Время", "User ID", "Имя", "Фамилия", 
+    "Должность", "Магазин", "Команда", "Тип события"
+]
 
-# ===================== ИНИЦИАЛИЗАЦИЯ СТАТИСТИКИ =====================
-async def initialize_stats_sheet():
-    """Создание листа статистики при первом запуске"""
+async def log_user_activity(user_id: str, command: str, event_type: str = "command"):
+    """Запись информации о действии пользователя"""
     try:
-        spreadsheet = client.open(ORDERS_SPREADSHEET_NAME)
-        spreadsheet.add_worksheet(title=STATS_SHEET_NAME, rows=1000, cols=4)
-        stats_sheet = spreadsheet.worksheet(STATS_SHEET_NAME)
-        stats_sheet.update('A1:D1', [['Дата', 'НомерЗаказа', 'ChatID', 'Статус']])
+        user_data = await get_user_data(str(user_id))
+        if not user_data:
+            return
+            
+        stats_sheet = main_spreadsheet.worksheet(STATS_SHEET_NAME)
+        stats_sheet.append_row([
+            datetime.now().strftime("%d.%m.%Y"),
+            datetime.now().strftime("%H:%M:%S"),
+            str(user_id),
+            user_data.get('name', ''),
+            user_data.get('surname', ''),
+            user_data.get('position', ''),
+            user_data.get('shop', ''),
+            command,
+            event_type
+        ])
     except Exception as e:
-        logging.info(f"Статистический лист уже существует: {str(e)}")
+        logging.error(f"Ошибка логирования статистики: {str(e)}")
+
 
 
 
