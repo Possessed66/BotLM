@@ -1269,7 +1269,7 @@ async def startup():
     if TEST_MODE:
         await notify_admins("🔧 Бот запущен в ТЕСТОВОМ РЕЖИМЕ. Уведомления отправляются только администраторам.")
     
-    await initialize_stats_sheet()
+    
     asyncio.create_task(scheduled_notifications_checker())
     """Общая инициализация для всех режимов"""
     startup_msg = "🟢 Бот запущен"
