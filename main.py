@@ -599,7 +599,7 @@ async def handle_client_order(message: types.Message, state: FSMContext):
         "🔢 Введите артикул товара:",
         reply_markup=article_input_keyboard()
     )
-    await log_user_activity(message.from_user.id, "заказ", "Заказ под клиента")
+    await log_user_activity(message.from_user.id, "Заказ под клиента", "order")
     await state.set_state(OrderStates.article_input)  # Установка состояния
     
 @dp.message(OrderStates.article_input)
@@ -779,7 +779,7 @@ async def final_confirmation(message: types.Message, state: FSMContext):
         # Записываем данные
         department_sheet.batch_update(updates)
         await message.answer("✅ Заказ успешно сохранен!", reply_markup=main_menu_keyboard())
-        await log_user_activity(message.from_user.id, "Подтвердить")
+        await log_user_activity(message.from_user.id, "Подтвердить","Confirmation")
         await state.clear()
 
     except Exception as e:
@@ -823,7 +823,7 @@ async def cancel_order_process(message: types.Message, state: FSMContext):
 @dp.message(F.text == "📋 Запрос информации")
 async def handle_info_request(message: types.Message, state: FSMContext):
     await state.update_data(last_activity=datetime.now().isoformat())
-    await log_user_activity(message.from_user.id, "запрос", "info")
+    await log_user_activity(message.from_user.id, "Запрос информации", "info")
     user_data = await get_user_data(str(message.from_user.id))
     if not user_data:
         await message.answer("❌ Сначала пройдите регистрацию через /start")
