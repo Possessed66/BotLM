@@ -1033,21 +1033,21 @@ async def send_broadcast(content: dict, target: str, user_ids: list = None):
                 await bot.send_message(
                     chat_id=int(user_id),
                     text=content['text'],
-                    parse_mode=ParseMode.HTML
+                    parse_mode=None
                 )
             elif content['type'] == 'photo':
                 await bot.send_photo(
                     chat_id=int(user_id),
                     photo=content['media'],
                     caption=content.get('caption', ''),
-                    parse_mode=ParseMode.HTML
+                    parse_mode=None
                 )
             elif content['type'] == 'document':
                 await bot.send_document(
                     chat_id=int(user_id),
                     document=content['media'],
                     caption=content.get('caption', ''),
-                    parse_mode=ParseMode.HTML
+                    parse_mode=None
                 )
             success += 1
             await asyncio.sleep(0.1)  # Защита от ограничений Telegram
