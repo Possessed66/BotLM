@@ -464,7 +464,11 @@ def calculate_delivery_date(supplier_data: dict) -> tuple:
 async def get_product_info(article: str, shop: str) -> dict:
     """Получение информации о товаре по артикулу"""
     try:
+        print(f"[INFO] Начало обработки get_product_info для артикула: {article}, магазин: {shop}")
+        
         gamma_data = cache.get("gamma_cluster", [])
+        print(f"[DEBUG] Получены данные из кэша gamma_cluster для магазина {shop}")
+
         product_data = next(
             (item for item in gamma_data
              if str(item.get("Артикул", "")).strip() == str(article).strip()
@@ -473,7 +477,10 @@ async def get_product_info(article: str, shop: str) -> dict:
         )
         
         if not product_data:
+            print(f"[ERROR] Не найдены данные о товаре для артикула: {article}, магазин: {shop}")
             return None
+
+        print(f"[INFO] Найдены данные о товаре для артикула: {article}, магазин: {shop}")
 
         supplier_id = str(product_data.get("Номер осн. пост.", "")).strip()
         supplier_sheet = get_supplier_dates_sheet(shop)
@@ -484,7 +491,10 @@ async def get_product_info(article: str, shop: str) -> dict:
         )
         
         if not supplier_data:
+            print(f"[ERROR] Не найдены данные поставщика для артикула: {article}, магазин: {shop}")
             return None
+
+        print(f"[INFO] Найдены данные поставщика для артикула: {article}, магазин: {shop}")
 
         # Получаем название поставщика (следующий столбец после ID)
         headers = supplier_sheet.headers
@@ -496,6 +506,7 @@ async def get_product_info(article: str, shop: str) -> dict:
 
         supplier_name = supplier_data.get("Название осн. пост.", "Не указано").strip()
 
+        print(f"[INFO] Успешно получена информация для артикула: {article}, магазин: {shop}")
         
         return {
             'article': article,
@@ -511,9 +522,11 @@ async def get_product_info(article: str, shop: str) -> dict:
         
     except (ValueError, IndexError) as e:
         logging.error(f"Supplier name error: {str(e)}")
+        print(f"[ERROR] Ошибка при обработке поставщика: {str(e)}")
         return None
     except Exception as e:
         logging.error(f"Product info error: {str(e)}")
+        print(f"[ERROR] Ошибка в get_product_info: {str(e)}")
         return None
 
 
@@ -849,7 +862,7 @@ async def process_info_request(message: types.Message, state: FSMContext):
 
     response = (
         f"🔍 Информация о товаре:\n"
-        f"Магазин: {shop}\n"
+        f"Магазин: {user_shop}\n"
         f"📦Артикул: {product_info['article']}\n"
         f"🏷️Название: {product_info['product_name']}\n"
         f"🔢Отдел: {product_info['department']}\n"
