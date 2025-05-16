@@ -492,7 +492,13 @@ async def get_product_info(article: str, shop: str) -> dict:
         
         if not supplier_data:
             print(f"[ERROR] Не найдены данные поставщика для артикула: {article}, магазин: {shop}")
-            return None
+            return {
+                'article': article,
+                'product_name': product_data.get('Название', ''),
+                'department': str(product_data.get('Отдел', '')),
+                'shop': shop,
+                'supplier_status': 'Товар РЦ'
+            }
 
         print(f"[INFO] Найдены данные поставщика для артикула: {article}, магазин: {shop}")
 
