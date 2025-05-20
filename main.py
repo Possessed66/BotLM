@@ -1125,11 +1125,7 @@ async def scheduled_cache_update():
 
 async def startup():
     asyncio.create_task(scheduled_cache_update())
-    if TEST_MODE:
-        await notify_admins("🔧 Бот запущен в ТЕСТОВОМ РЕЖИМЕ. Уведомления отправляются только администраторам.")
-    
-    
-    
+     
     """Общая инициализация для всех режимов"""
     startup_msg = "🟢 Бот запущен"
     print(startup_msg)
