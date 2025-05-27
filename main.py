@@ -28,8 +28,8 @@ logging.basicConfig(
 )
 
 # ===================== КОНФИГУРАЦИЯ СЕРВИСНОГО РЕЖИМА =====================
-SERVICE_MODE = False
-ADMINS = [122086799]  # ID администраторов
+SERVICE_MODE = True
+ADMINS = [122086799, 5183727015]  # ID администраторов
 
 # ===================== КОНФИГУРАЦИЯ КЭША =====================
 CACHE_TTL = 43200  # 12 часов в секундах
@@ -222,16 +222,22 @@ async def toggle_service_mode(enable: bool):
 
 # ===================== СИСТЕМА КЭШИРОВАНИЯ =====================
 async def cache_sheet_data(sheet, cache_key: str):
-    """Кэширование данных из листа"""
+    """Кэширование данных из листа с сериализацией"""
     try:
         print(f"⌛ Начало загрузки кэша для ключа: {cache_key}")
         data = sheet.get_all_records()
-        print(f"✅ Данные из Google Sheets ({cache_key}): {data[:1]}...")  # Первая запись для примера
-        cache[cache_key] = data
+        serialized_data = pickle.dumps(data)  # Сериализация
+        cache[cache_key] = serialized_data
         print(f"📥 Успешно загружено в кэш: {cache_key} ({len(data)} записей)")
     except Exception as e:
         print(f"🔥 Ошибка загрузки {cache_key}: {str(e)}")
         raise
+
+async def get_cached_data(cache_key: str) -> List[Dict]:
+    """Десериализация данных из кэша"""
+    if cache_key in cache:
+        return pickle.loads(cache[cache_key])
+    return []
 
 
 
@@ -249,23 +255,13 @@ async def cache_supplier_data(shop: str):
 
 
 
-async def preload_cache(_=None):  # Добавляем неиспользуемый параметр
-    """Предзагрузка данных при старте бота"""
+async def preload_cache(_=None):
+    """Предзагрузка только необходимых данных"""
     try:
-        print("♻️ Начало предзагрузки кэша...")
-        
-        # Основная загрузка данных
         await cache_sheet_data(users_sheet, "users")
+        print("Кэш пользователи, загружен")
         await cache_sheet_data(gamma_cluster_sheet, "gamma_cluster")
-        
-        # Загрузка данных поставщиков
-        shops = users_sheet.col_values(5)[1:]  # Колонка E
-        for shop in set(shops):
-            await cache_supplier_data(shop)
-            
-        print(f"✅ Кэш загружен. Всего элементов: {len(cache)}")
-        validate_cache_keys()
-    
+        print("Кэш гамма, загружен")
     except Exception as e:
         print(f"⚠️ Ошибка загрузки кэша: {str(e)}")
         raise
@@ -426,15 +422,21 @@ async def log_error(user_id: str, error: str):
     ])
 
 
-def get_supplier_dates_sheet(shop_number: str):
+def get_supplier_dates_sheet(shop_number: str) -> Dict:
+    """Получение данных поставщика с индексацией"""
     cache_key = f"supplier_{shop_number}"
     if cache_key in cache:
-        return FakeSheet(cache[cache_key])
+        return pickle.loads(cache[cache_key])
     
-    sheet = orders_spreadsheet.worksheet(f"Даты выходов заказов {shop_number}")
-    data = sheet.get_all_records()
-    cache[cache_key] = data
-    return FakeSheet(data)
+    try:
+        sheet = orders_spreadsheet.worksheet(f"Даты выходов заказов {shop_number}")
+        data = sheet.get_all_records()
+        index = {item["Номер осн. пост."]: item for item in data}
+        cache[cache_key] = pickle.dumps(index)
+        return index
+    except Exception as e:
+        print(f"⚠️ Ошибка загрузки поставщиков для магазина {shop_number}: {str(e)}")
+        return {}
 
 
 def calculate_delivery_date(supplier_data: dict) -> tuple:
@@ -462,78 +464,39 @@ def calculate_delivery_date(supplier_data: dict) -> tuple:
 
 # ========================== ПАРСЕР ===========================
 async def get_product_info(article: str, shop: str) -> dict:
-    """Получение информации о товаре по артикулу"""
-    try:
-        print(f"[INFO] Начало обработки get_product_info для артикула: {article}, магазин: {shop}")
-        
-        gamma_data = cache.get("gamma_cluster", [])
-        print(f"[DEBUG] Получены данные из кэша gamma_cluster для магазина {shop}")
-
-        product_data = next(
-            (item for item in gamma_data
-             if str(item.get("Артикул", "")).strip() == str(article).strip()
-             and str(item.get("Магазин", "")).strip() == str(shop).strip()),
-            None
-        )
-        
-        if not product_data:
-            print(f"[ERROR] Не найдены данные о товаре для артикула: {article}, магазин: {shop}")
-            return None
-
-        print(f"[INFO] Найдены данные о товаре для артикула: {article}, магазин: {shop}")
-
-        supplier_id = str(product_data.get("Номер осн. пост.", "")).strip()
-        supplier_sheet = get_supplier_dates_sheet(shop)
-        supplier_data = next(
-            (item for item in supplier_sheet.data 
-             if str(item.get("Номер осн. пост.", "")).strip() == supplier_id),
-            None
-        )
-        
-        if not supplier_data:
-            print(f"[ERROR] Не найдены данные поставщика для артикула: {article}, магазин: {shop}")
-            return {
-                'article': article,
-                'product_name': product_data.get('Название', ''),
-                'department': str(product_data.get('Отдел', '')),
-                'shop': shop,
-                'supplier_status': 'Товар РЦ'
-            }
-
-        print(f"[INFO] Найдены данные поставщика для артикула: {article}, магазин: {shop}")
-
-        # Получаем название поставщика (следующий столбец после ID)
-        headers = supplier_sheet.headers
-        supplier_id_index = headers.index("Номер осн. пост.")
-        supplier_name = list(supplier_data.values())[supplier_id_index + 1]
-
-        parsed_supplier = parse_supplier_data(supplier_data)
-        order_date, delivery_date = calculate_delivery_date(parsed_supplier)
-
-        supplier_name = supplier_data.get("Название осн. пост.", "Не указано").strip()
-
-        print(f"[INFO] Успешно получена информация для артикула: {article}, магазин: {shop}")
-        
+    """Получение информации о товаре с использованием индексов"""
+    gamma_data = await get_cached_data("gamma_cluster")
+    if not gamma_data:
+        return None
+    
+    # Индексирование по артикулу и магазину
+    index = {(item["Артикул"], item["Магазин"]): item for item in gamma_data}
+    product_data = index.get((article, shop))
+    
+    if not product_data:
+        return None
+    
+    supplier_data = get_supplier_dates_sheet(shop).get(product_data["Номер осн. пост."])
+    if not supplier_data:
         return {
             'article': article,
             'product_name': product_data.get('Название', ''),
             'department': str(product_data.get('Отдел', '')),
-            'order_date': order_date,
-            'delivery_date': delivery_date,
-            'supplier_id': supplier_id,
-            'supplier_name': supplier_name,  # Новое поле
             'shop': shop,
-            'parsed_supplier': parsed_supplier
+            'supplier_status': 'Товар РЦ'
         }
-        
-    except (ValueError, IndexError) as e:
-        logging.error(f"Supplier name error: {str(e)}")
-        print(f"[ERROR] Ошибка при обработке поставщика: {str(e)}")
-        return None
-    except Exception as e:
-        logging.error(f"Product info error: {str(e)}")
-        print(f"[ERROR] Ошибка в get_product_info: {str(e)}")
-        return None
+    
+    order_date, delivery_date = calculate_delivery_date(supplier_data)
+    return {
+        'article': article,
+        'product_name': product_data.get('Название', ''),
+        'department': str(product_data.get('Отдел', '')),
+        'order_date': order_date,
+        'delivery_date': delivery_date,
+        'supplier_id': product_data.get("Номер осн. пост.", ""),
+        'supplier_name': supplier_data.get("Название осн. пост.", "Не указано"),
+        'shop': shop
+    }
 
 
 # ===================== ОБРАБОТЧИКИ КОМАНД =====================
@@ -886,31 +849,18 @@ async def handle_stock_check(message: types.Message):
     await message.answer("🛠️ Функция в разработке")
 
 
+
+# ===================== ОБНОВЛЕНИЕ КЭША =====================
 @dp.message(F.text == "/reload_cache")
-async def reload_cache_command(message: types.Message):  # Изменено имя функции
+async def reload_cache_command(message: types.Message):
+    """Перезагрузка кэша с очисткой"""
     try:
-        # Принудительная очистка кэша
         cache.clear()
-        
-        # Загрузка основных данных
         await cache_sheet_data(users_sheet, "users")
         await cache_sheet_data(gamma_cluster_sheet, "gamma_cluster")
-        
-        # Дополнительная проверка данных
-        gamma_data = cache.get("gamma_cluster", [])
-        test_article = gamma_data[0].get("Артикул") if gamma_data else None
-        response = (
-            f"✅ Кэш перезагружен\n"
-            f"• Пользователей: {len(cache['users'])}\n"
-            f"• Товаров: {len(gamma_data)}\n"
-            f"• Тестовый артикул: {test_article or 'Нет данных'}"
-        )
-        
-        await message.answer(response)
+        await message.answer("✅ Кэш перезагружен")
     except Exception as e:
-        error_msg = f"Ошибка перезагрузки кэша: {str(e)}"
-        print(error_msg)
-        await message.answer(error_msg)
+        await message.answer(f"⚠️ Ошибка: {str(e)}")
 
 
 
