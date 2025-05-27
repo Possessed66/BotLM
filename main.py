@@ -870,12 +870,12 @@ async def process_info_request(message: types.Message, state: FSMContext):
     response = (
         f"🔍 Информация о товаре:\n"
         f"Магазин: {user_shop}\n"
-        f"📦Артикул: {product_info['article']}\n"
-        f"🏷️Название: {product_info['product_name']}\n"
-        f"🔢Отдел: {product_info['department']}\n"
-        f"📅Ближайшая дата заказа: {product_info['order_date']}\n"
-        f"🚚Ожидаемая дата поставки: {product_info['delivery_date']}\n"
-        f"🏭 Поставщик: {product_info['supplier_name']}" 
+        f"📦Артикул: {product_info['Артикул']}\n"
+        f"🏷️Название: {product_info['Название']}\n"
+        f"🔢Отдел: {product_info['Отдел']}\n"
+        f"📅Ближайшая дата заказа: {product_info['Дата заказа']}\n"
+        f"🚚Ожидаемая дата поставки: {product_info['Дата поставки']}\n"
+        f"🏭 Поставщик: {product_info['Поставщик']}" 
     )
     
     await message.answer(response, reply_markup=main_menu_keyboard())
