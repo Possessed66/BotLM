@@ -1147,7 +1147,6 @@ async def startup():
         print("♻️ Начало загрузки кэша...")
         await preload_cache()
         print(f"✅ Кэш загружен. Ключи: {list(cache.keys())[:5]}...")
-        await notify_admins(startup_msg)
     except Exception as e:
         error_msg = f"🚨 Критическая ошибка запуска: {str(e)}"
         print(error_msg)
