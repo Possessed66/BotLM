@@ -491,7 +491,9 @@ async def get_product_info(article: str, shop: str) -> dict:
         
         # Создаем ключ для поиска
         key = f"{article}{shop}"
-        
+        print(f"[DEBUG] Сгенерированный ключ: {key} (тип: {type(key)})")
+        first_item = gamma_data[0]
+        print(f"[DEBUG] Первый элемент в gamma_data: {first_item}")
         # Ищем товар по существующему ключу
         product_data = next(
             (item for item in gamma_data if item.get("Ключ") == key),
