@@ -484,18 +484,27 @@ async def get_product_info(article: str, shop: str) -> dict:
     """Получение информации о товаре по артикулу"""
     try:
         print(f"[INFO] Начало обработки get_product_info для артикула: {article}, магазин: {shop}")
+        
+        # Получаем данные из кэша
         gamma_data = await get_cached_data("gamma_cluster")
         print(f"[DEBUG] Получены данные из кэша gamma_cluster для магазина {shop}")
+        
+        # Создаем ключ для поиска
+        key = f"{article}{shop}"
+        
+        # Ищем товар по существующему ключу
         product_data = next(
-            (item for item in gamma_data
-             if str(item.get("Артикул", "")).strip() == str(article).strip()
-             and str(item.get("Магазин", "")).strip() == str(shop).strip()),
+            (item for item in gamma_data if item.get("Ключ") == key),
             None
         )
+        
         if not product_data:
             print(f"[ERROR] Не найдены данные о товаре для артикула: {article}, магазин: {shop}")
             return None
+        
         print(f"[INFO] Найдены данные о товаре для артикула: {article}, магазин: {shop}")
+        
+        # Остальная логика без изменений
         supplier_id = str(product_data.get("Номер осн. пост.", "")).strip()
         supplier_sheet = get_supplier_dates_sheet(shop)
         supplier_data = next(
@@ -503,6 +512,7 @@ async def get_product_info(article: str, shop: str) -> dict:
              if str(item.get("Номер осн. пост.", "")).strip() == supplier_id),
             None
         )
+        
         if not supplier_data:
             print(f"[ERROR] Не найдены данные поставщика для артикула: {article}, магазин: {shop}")
             return {
@@ -512,7 +522,9 @@ async def get_product_info(article: str, shop: str) -> dict:
                 'Магазин': shop,
                 'Поставщик': 'Товар РЦ'
             }
+        
         print(f"[INFO] Найдены данные поставщика для артикула: {article}, магазин: {shop}")
+        
         # Получаем название поставщика (следующий столбец после ID)
         headers = supplier_sheet.headers
         supplier_id_index = headers.index("Номер осн. пост.")
@@ -520,7 +532,9 @@ async def get_product_info(article: str, shop: str) -> dict:
         parsed_supplier = parse_supplier_data(supplier_data)
         order_date, delivery_date = calculate_delivery_date(parsed_supplier)
         supplier_name = supplier_data.get("Название осн. пост.", "Не указано").strip()
+        
         print(f"[INFO] Успешно получена информация для артикула: {article}, магазин: {shop}")
+        
         return {
             'Артикул': article,
             'Название': product_data.get('Название', ''),
@@ -532,6 +546,7 @@ async def get_product_info(article: str, shop: str) -> dict:
             'Номер поставщика': supplier_id,
             'Парсинг поставщика': parsed_supplier
         }
+    
     except (ValueError, IndexError) as e:
         logging.error(f"Supplier name error: {str(e)}")
         print(f"[ERROR] Ошибка при обработке поставщика: {str(e)}")
@@ -680,6 +695,7 @@ async def process_shop_selection(message: types.Message, state: FSMContext):
     
     # Продолжаем процесс оформления заказа
     await process_article_continuation(message, state)
+    await message.answer("🔄 Загружаю", reply_markup=ReplyKeyboardRemove())
 
 
 async def process_article_continuation(message: types.Message, state: FSMContext):
