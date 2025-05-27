@@ -24,6 +24,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 
 logging.basicConfig(
+    
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
 )
@@ -235,9 +236,11 @@ async def cache_sheet_data(sheet, cache_key: str):
         raise
 
 async def get_cached_data(cache_key: str) -> List[Dict]:
-    """Десериализация данных из кэша"""
+    print(f"[DEBUG] Получение данных из кэша: {cache_key}")
     if cache_key in cache:
-        return pickle.loads(cache[cache_key])
+        data = pickle.loads(cache[cache_key])
+        print(f"[DEBUG] Десериализовано: {len(data)} записей")
+        return data
     return []
 
 
@@ -468,7 +471,7 @@ async def get_product_info(article: str, shop: str) -> dict:
     """Получение информации о товаре по артикулу"""
     try:
         print(f"[INFO] Начало обработки get_product_info для артикула: {article}, магазин: {shop}")
-        gamma_data = get_cached_data("gamma_cluster")
+        gamma_data = await get_cached_data("gamma_cluster")
         print(f"[DEBUG] Получены данные из кэша gamma_cluster для магазина {shop}")
         product_data = next(
             (item for item in gamma_data
