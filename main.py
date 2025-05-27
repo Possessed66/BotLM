@@ -497,6 +497,7 @@ async def get_product_info(article: str, shop: str) -> dict:
         product_data = gamma_index.get(f"{article}{shop}")
         
         if not product_data:
+            print("Не найден индекс")
             # Резервный вариант: линейный поиск
             gamma_data = pickle.loads(cache.get("gamma_cluster", b""))
             product_data = next(
@@ -1142,7 +1143,7 @@ async def startup():
     """Общая инициализация для всех режимов"""
     startup_msg = "🟢 Бот запущен"
     print(startup_msg)
-    try:  # <-- Отступ должен быть одинаковым с print(startup_msg)
+    try:  
         print("♻️ Начало загрузки кэша...")
         await preload_cache()
         print(f"✅ Кэш загружен. Ключи: {list(cache.keys())[:5]}...")
@@ -1150,7 +1151,6 @@ async def startup():
     except Exception as e:
         error_msg = f"🚨 Критическая ошибка запуска: {str(e)}"
         print(error_msg)
-        await notify_admins(error_msg)
         raise
 
 async def shutdown():
