@@ -249,26 +249,19 @@ async def get_cached_data(cache_key: str) -> List[Dict]:
 
 
 
-def get_supplier_dates_sheet(shop_number: str):
+def get_supplier_dates_sheet(shop_number: str) -> FakeSheet:
+    """Получение данных поставщика с индексацией"""
     cache_key = f"supplier_{shop_number}"
     if cache_key in cache:
-        data = cache[cache_key]
-        # Проверка, что data — это список словарей
-        if isinstance(data, list) and all(isinstance(item, dict) for item in data):
-            return FakeSheet(data)
-        else:
-            print(f"[ERROR] Некорректные данные в кэше для магазина {shop_number}")
-            return FakeSheet([])
+        # Десериализация и создание FakeSheet
+        data = pickle.loads(cache[cache_key])
+        return FakeSheet(data)
     try:
         sheet = orders_spreadsheet.worksheet(f"Даты выходов заказов {shop_number}")
         data = sheet.get_all_records()
-        # Проверка, что data — это список словарей
-        if isinstance(data, list) and all(isinstance(item, dict) for item in data):
-            cache[cache_key] = data
-            return FakeSheet(data)
-        else:
-            print(f"[ERROR] Некорректные данные из Google Sheets для магазина {shop_number}")
-            return FakeSheet([])
+        # Сериализация и сохранение в кэш
+        cache[cache_key] = pickle.dumps(data)
+        return FakeSheet(data)
     except Exception as e:
         print(f"[ERROR] Ошибка получения данных поставщика для магазина {shop_number}: {str(e)}")
         return FakeSheet([])
