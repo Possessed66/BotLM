@@ -468,28 +468,16 @@ async def get_product_info(article: str, shop: str) -> dict:
     """Получение информации о товаре по артикулу"""
     try:
         print(f"[INFO] Начало обработки get_product_info для артикула: {article}, магазин: {shop}")
-        
-        # Проверка наличия данных в кэше
-        gamma_data = cache.get("gamma_cluster", [])
-        print(f"[DEBUG] gamma_cluster кэш: {len(gamma_data)} записей")
-        if not gamma_data:
-            print(f"[ERROR] Кэш gamma_cluster пуст! Проверьте загрузку данных.")
-            return None
-        
-        # Логирование первых 2 записей из кэша для отладки
-        print(f"[DEBUG] Пример данных из gamma_cluster: {gamma_data[:2]}")
-        
-        # Поиск товара
+        gamma_data = get_cached_data("gamma_cluster")
+        print(f"[DEBUG] Получены данные из кэша gamma_cluster для магазина {shop}")
         product_data = next(
             (item for item in gamma_data
              if str(item.get("Артикул", "")).strip() == str(article).strip()
              and str(item.get("Магазин", "")).strip() == str(shop).strip()),
             None
         )
-        
         if not product_data:
             print(f"[ERROR] Не найдены данные о товаре для артикула: {article}, магазин: {shop}")
-            print(f"[DEBUG] Проверьте, есть ли в кэше товар с артикулом '{article}' и магазином '{shop}'")
             return None
         
         print(f"[INFO] Найдены данные о товаре для артикула: {article}, магазин: {shop}")
