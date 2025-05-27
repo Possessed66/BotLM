@@ -482,14 +482,50 @@ async def get_product_info(article: str, shop: str) -> dict:
         if not product_data:
             print(f"[ERROR] Не найдены данные о товаре для артикула: {article}, магазин: {shop}")
             return None
-        
         print(f"[INFO] Найдены данные о товаре для артикула: {article}, магазин: {shop}")
-        print(f"[DEBUG] Данные товара: {product_data}")
-        
-        # Остальная логика...
-        
+        supplier_id = str(product_data.get("Номер осн. пост.", "")).strip()
+        supplier_sheet = get_supplier_dates_sheet(shop)
+        supplier_data = next(
+            (item for item in supplier_sheet.data 
+             if str(item.get("Номер осн. пост.", "")).strip() == supplier_id),
+            None
+        )
+        if not supplier_data:
+            print(f"[ERROR] Не найдены данные поставщика для артикула: {article}, магазин: {shop}")
+            return {
+                'Артикул': article,
+                'Название': product_data.get('Название', ''),
+                'Отдел': str(product_data.get('Отдел', '')),
+                'Магазин': shop,
+                'Поставщик': 'Товар РЦ'
+            }
+        print(f"[INFO] Найдены данные поставщика для артикула: {article}, магазин: {shop}")
+        # Получаем название поставщика (следующий столбец после ID)
+        headers = supplier_sheet.headers
+        supplier_id_index = headers.index("Номер осн. пост.")
+        supplier_name = list(supplier_data.values())[supplier_id_index + 1]
+        parsed_supplier = parse_supplier_data(supplier_data)
+        order_date, delivery_date = calculate_delivery_date(parsed_supplier)
+        supplier_name = supplier_data.get("Название осн. пост.", "Не указано").strip()
+        print(f"[INFO] Успешно получена информация для артикула: {article}, магазин: {shop}")
+        return {
+            'Артикул': article,
+            'Название': product_data.get('Название', ''),
+            'Отдел': str(product_data.get('Отдел', '')),
+            'Магазин': shop,
+            'Поставщик': supplier_name,
+            'Дата заказа': order_date,
+            'Дата поставки': delivery_date,
+            'Номер поставщика': supplier_id,
+            'Парсинг поставщика': parsed_supplier
+        }
+    except (ValueError, IndexError) as e:
+        logging.error(f"Supplier name error: {str(e)}")
+        print(f"[ERROR] Ошибка при обработке поставщика: {str(e)}")
+        return None
     except Exception as e:
-        print(f"[CRITICAL] Ошибка в get_product_info: {str(e)}")
+        logging.error(f"Product info error: {str(e)}")
+        print(f"[ERROR] Ошибка в get_product_info: {str(e)}")
         return None
 
 
@@ -637,33 +673,28 @@ async def process_article_continuation(message: types.Message, state: FSMContext
     data = await state.get_data()
     article = data.get('article')
     selected_shop = data.get('selected_shop')
-    
     product_info = await get_product_info(article, selected_shop)
     if not product_info:
         await message.answer("❌ Товар не найден в выбранном магазине")
         await state.clear()
         return
-
     response = (
         f"Магазин: {selected_shop}\n"
-        f"📦 Артикул: {product_info['article']}\n"
-        f"🏷️ Название: {product_info['product_name']}\n"
-        f"🏭 Поставщик: {product_info['supplier_name']}\n" 
-        f"📅 Дата заказа: {product_info['order_date']}\n"
-        f"🚚 Дата поставки: {product_info['delivery_date']}\n"
-        
+        f"📦 Артикул: {product_info['Артикул']}\n"
+        f"🏷️ Название: {product_info['Название']}\n"
+        f"🏭 Поставщик: {product_info['Поставщик']}\n" 
+        f"📅 Дата заказа: {product_info['Дата заказа']}\n"
+        f"🚚 Дата поставки: {product_info['Дата поставки']}\n"
     )
-    
     await state.update_data(
-        article=product_info['article'],
-        product_name=product_info['product_name'],
-        department=product_info['department'],
-        order_date=product_info['order_date'],
-        delivery_date=product_info['delivery_date'],
-        supplier_id=product_info['supplier_id'],
-        supplier_name=product_info['supplier_name']
+        article=product_info['Артикул'],
+        product_name=product_info['Название'],
+        department=product_info['Отдел'],
+        order_date=product_info['Дата заказа'],
+        delivery_date=product_info['Дата поставки'],
+        supplier_id=product_info['Номер поставщика'],
+        supplier_name=product_info['Поставщик']
     )
-    
     await message.answer(response)
     await message.answer("🔢 Введите количество товара:")
     await state.set_state(OrderStates.quantity_input)
