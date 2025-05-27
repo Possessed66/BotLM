@@ -224,13 +224,24 @@ async def toggle_service_mode(enable: bool):
 
 # ===================== СИСТЕМА КЭШИРОВАНИЯ =====================
 async def cache_sheet_data(sheet, cache_key: str):
-    """Кэширование данных из листа с сериализацией"""
+    """Кэширование данных из листа с сериализацией и индексацией"""
     try:
         print(f"⌛ Начало загрузки кэша для ключа: {cache_key}")
-        data = sheet.get_all_records()
-        serialized_data = pickle.dumps(data)  # Сериализация
+        data = sheet.get_all_records()  # Получаем данные из Google Sheets
+        
+        # Создаем индекс на основе "Ключ" (артикул + магазин)
+        index = {item.get("Ключ", ""): item for item in data}
+        
+        # Сериализуем данные и индекс
+        serialized_data = pickle.dumps(data)
+        serialized_index = pickle.dumps(index)
+        
+        # Сохраняем в кэш
         cache[cache_key] = serialized_data
+        cache[f"{cache_key}_index"] = serialized_index  # Сохраняем индекс отдельно
+        
         print(f"📥 Успешно загружено в кэш: {cache_key} ({len(data)} записей)")
+        print(f"📥 Индекс сохранен: {cache_key}_index ({len(index)} записей)")
     except Exception as e:
         print(f"🔥 Ошибка загрузки {cache_key}: {str(e)}")
         raise
@@ -481,24 +492,19 @@ def calculate_delivery_date(supplier_data: dict) -> tuple:
 
 # ========================== ПАРСЕР ===========================
 async def get_product_info(article: str, shop: str) -> dict:
-    """Получение информации о товаре по артикулу"""
     try:
-        print(f"[INFO] Начало обработки get_product_info для артикула: {article}, магазин: {shop}")
+        gamma_index = pickle.loads(cache.get(f"gamma_cluster_index", b""))
+        product_data = gamma_index.get(f"{article}{shop}")
         
-        # Получаем данные из кэша
-        gamma_data = await get_cached_data("gamma_cluster")
-        print(f"[DEBUG] Получены данные из кэша gamma_cluster для магазина {shop}")
-        
-        # Создаем ключ для поиска
-        key = f"{article}{shop}"
-        print(f"[DEBUG] Сгенерированный ключ: {key} (тип: {type(key)})")
-        first_item = gamma_data[0]
-        print(f"[DEBUG] Первый элемент в gamma_data: {first_item}")
-        # Ищем товар по существующему ключу
-        product_data = next(
-            (item for item in gamma_data if str(item.get("Ключ", "")) == key),
-            None
-        )
+        if not product_data:
+            # Резервный вариант: линейный поиск
+            gamma_data = pickle.loads(cache.get("gamma_cluster", b""))
+            product_data = next(
+                (item for item in gamma_data
+                 if str(item.get("Артикул", "")).strip() == str(article).strip()
+                 and str(item.get("Магазин", "")).strip() == str(shop).strip()),
+                None
+            )
         
         if not product_data:
             print(f"[ERROR] Не найдены данные о товаре для артикула: {article}, магазин: {shop}")
