@@ -252,6 +252,7 @@ async def get_cached_data(cache_key: str) -> List[Dict]:
 def get_supplier_dates_sheet(shop_number: str) -> FakeSheet:
     """Получение данных поставщика с индексацией"""
     cache_key = f"supplier_{shop_number}"
+    print(cache_key)
     if cache_key in cache:
         # Десериализация и создание FakeSheet
         data = pickle.loads(cache[cache_key])
@@ -453,21 +454,6 @@ async def log_error(user_id: str, error: str):
     ])
 
 
-def get_supplier_dates_sheet(shop_number: str) -> Dict:
-    """Получение данных поставщика с индексацией"""
-    cache_key = f"supplier_{shop_number}"
-    if cache_key in cache:
-        return pickle.loads(cache[cache_key])
-    
-    try:
-        sheet = orders_spreadsheet.worksheet(f"Даты выходов заказов {shop_number}")
-        data = sheet.get_all_records()
-        index = {item["Номер осн. пост."]: item for item in data}
-        cache[cache_key] = pickle.dumps(index)
-        return index
-    except Exception as e:
-        print(f"⚠️ Ошибка загрузки поставщиков для магазина {shop_number}: {str(e)}")
-        return {}
 
 
 def calculate_delivery_date(supplier_data: dict) -> tuple:
