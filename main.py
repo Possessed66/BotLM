@@ -496,7 +496,7 @@ async def get_product_info(article: str, shop: str) -> dict:
         print(f"[DEBUG] Первый элемент в gamma_data: {first_item}")
         # Ищем товар по существующему ключу
         product_data = next(
-            (item for item in gamma_data if item.get("Ключ") == key),
+            (item for item in gamma_data if item.get("Ключ") == str(key),
             None
         )
         
@@ -696,8 +696,9 @@ async def process_shop_selection(message: types.Message, state: FSMContext):
     await state.update_data(selected_shop=selected_shop)
     
     # Продолжаем процесс оформления заказа
-    await process_article_continuation(message, state)
     await message.answer("🔄 Загружаю", reply_markup=ReplyKeyboardRemove())
+    await process_article_continuation(message, state)
+    
 
 
 async def process_article_continuation(message: types.Message, state: FSMContext):
