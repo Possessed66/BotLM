@@ -235,6 +235,9 @@ async def cache_sheet_data(sheet, cache_key: str):
         print(f"🔥 Ошибка загрузки {cache_key}: {str(e)}")
         raise
 
+
+
+
 async def get_cached_data(cache_key: str) -> List[Dict]:
     print(f"[DEBUG] Получение данных из кэша: {cache_key}")
     if cache_key in cache:
@@ -245,17 +248,39 @@ async def get_cached_data(cache_key: str) -> List[Dict]:
 
 
 
+
+def get_supplier_dates_sheet(shop_number: str):
+    cache_key = f"supplier_{shop_number}"
+    if cache_key in cache:
+        # Десериализация данных из кэша
+        data = pickle.loads(cache[cache_key])
+        return FakeSheet(data)  # Создание FakeSheet из десериализованных данных
+    try:
+        sheet = orders_spreadsheet.worksheet(f"Даты выходов заказов {shop_number}")
+        data = sheet.get_all_records()
+        # Сериализация и сохранение в кэш
+        serialized_data = pickle.dumps(data)
+        cache[cache_key] = serialized_data
+        return FakeSheet(data)
+    except Exception as e:
+        print(f"[ERROR] Ошибка получения данных поставщика для магазина {shop_number}: {str(e)}")
+        return FakeSheet([])
+
+
+
+
 async def cache_supplier_data(shop: str):
     """Кэширование данных поставщиков для магазина"""
+    
     cache_key = f"supplier_{shop}"
     try:
         sheet = get_supplier_dates_sheet(shop)
         data = sheet.get_all_records()
-        cache[cache_key] = data
+        serialized_data = pickle.dumps(data)  # Сериализация данных
+        cache[cache_key] = serialized_data  # Сохранение сериализованных данных
         print(f"📦 Загружено поставщиков для магазина {shop}: {len(data)}")
     except Exception as e:
         print(f"⚠️ Ошибка загрузки поставщиков для магазина {shop}: {str(e)}")
-
 
 
 
@@ -269,6 +294,8 @@ async def preload_cache(_=None):
     except Exception as e:
         print(f"⚠️ Ошибка загрузки кэша: {str(e)}")
         raise
+
+
 
 def validate_cache_keys():
     required_keys = ['users', 'gamma_cluster']
