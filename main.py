@@ -493,9 +493,9 @@ def calculate_delivery_date(supplier_data: dict) -> tuple:
 # ========================== ПАРСЕР ===========================
 async def get_product_info(article: str, shop: str) -> dict:
     try:
-        gamma_index = pickle.loads(cache.get(int(f"gamma_cluster_index", b"")))
-        product_data = gamma_index.get(int(f"{article}{shop}"))
-        
+        gamma_index = pickle.loads(cache.get(f"gamma_cluster_index", b""))
+        key = int(f"{article}{shop}")
+        product_data = gamma_index.get(key)
         if not product_data:
             print("Не найден индекс")
             # Резервный вариант: линейный поиск
