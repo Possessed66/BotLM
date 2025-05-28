@@ -630,6 +630,7 @@ async def process_shop(message: types.Message, state: FSMContext):
 
 @dp.message(F.text == "🛒 Заказ под клиента")
 async def handle_client_order(message: types.Message, state: FSMContext):
+    await message.answer("🔄 Загружаю", reply_markup=ReplyKeyboardRemove())
     await state.update_data(last_activity=datetime.now().isoformat())
     user_data = await get_user_data(str(message.from_user.id))
     
