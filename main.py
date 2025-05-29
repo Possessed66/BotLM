@@ -630,7 +630,7 @@ async def process_shop(message: types.Message, state: FSMContext):
 
 @dp.message(F.text == "🛒 Заказ под клиента")
 async def handle_client_order(message: types.Message, state: FSMContext):
-    await message.answer("🔄 Загружаю", reply_markup=ReplyKeyboardRemove())
+    await message.answer("🔄 Загружаю модуль", reply_markup=ReplyKeyboardRemove())
     await state.update_data(last_activity=datetime.now().isoformat())
     user_data = await get_user_data(str(message.from_user.id))
     
@@ -883,6 +883,7 @@ async def handle_info_request(message: types.Message, state: FSMContext):
 
 @dp.message(InfoRequest.article_input)
 async def process_info_request(message: types.Message, state: FSMContext):
+    await message.answer("🔄 Загружаю модуль", reply_markup=ReplyKeyboardRemove())
     await state.update_data(last_activity=datetime.now().isoformat())
     article = message.text.strip()
     data = await state.get_data()
@@ -959,7 +960,7 @@ async def check_cache(message: types.Message):
     )
     await message.answer(response)
 
-#===========================Рассылка==================================
+
 
 
 # ===================== РАССЫЛКА =====================
