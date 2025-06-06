@@ -447,7 +447,7 @@ async def timeout_middleware(handler, event, data):
             await state.update_data(last_activity=datetime.now().isoformat())
 
     return await handler(event, data)
-    
+    await message.answer(reply_markup=main_menu_keyboard())
 
 # ===================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====================
 async def get_user_data(user_id: str) -> Dict[str, Any]:
