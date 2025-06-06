@@ -749,7 +749,7 @@ async def process_article_continuation(message: types.Message, state: FSMContext
         supplier_name=product_info['Поставщик']
     )
     await message.answer(response)
-    await message.answer("🔢 Введите количество товара:")
+    await message.answer("🔢 Введите количество товара:", reply_markup=cancel_only_keyboard())
     await state.set_state(OrderStates.quantity_input)
 
 def parse_supplier_data(record):
