@@ -153,6 +153,12 @@ def main_menu_keyboard():
     return builder.as_markup(resize_keyboard=True)
 
 
+def cancel_only_keyboard():
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="❌ Отмена")
+    return builder.as_markup(resize_keyboard=True)
+
+
 def article_input_keyboard():
     builder = ReplyKeyboardBuilder()
     builder.button(text="❌ Отмена")
@@ -761,21 +767,35 @@ def parse_supplier_data(record):
     }
 
 
+# Модифицируем обработчики
 @dp.message(OrderStates.quantity_input)
 async def process_quantity(message: types.Message, state: FSMContext):
+    # Проверяем команду отмены
+    if message.text.strip().lower() in ["отмена", "❌ отмена"]:
+        await state.clear()
+        await message.answer("🔄 Операция отменена", reply_markup=main_menu_keyboard())
+        return
+        
     await state.update_data(last_activity=datetime.now().isoformat())
     if not message.text.strip().isdigit():
-        await message.answer("❌ Введите число!")
+        await message.answer("❌ Введите число!", reply_markup=cancel_only_keyboard())
         return
+        
     data = await state.get_data()
     await state.update_data(quantity=int(message.text.strip()))
-    # Запрос номера заказа или причины
-    await message.answer("Введите номер заказа или причину:")
+    # Запрос номера заказа или причины с клавиатурой отмены
+    await message.answer("Введите номер заказа или причину:", reply_markup=cancel_only_keyboard())
     await state.set_state(OrderStates.order_reason_input)
 
 
 @dp.message(OrderStates.order_reason_input)
 async def process_order_reason(message: types.Message, state: FSMContext):
+    # Проверяем команду отмены
+    if message.text.strip().lower() in ["отмена", "❌ отмена"]:
+        await state.clear()
+        await message.answer("🔄 Операция отменена", reply_markup=main_menu_keyboard())
+        return
+        
     await state.update_data(last_activity=datetime.now().isoformat())
     data = await state.get_data()
     order_reason = message.text.strip()
