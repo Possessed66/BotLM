@@ -388,12 +388,13 @@ async def maintenance_off(message: types.Message):
 # ===================== ОБНОВЛЕННЫЙ МИДЛВАР =====================
 @dp.update.middleware()
 async def service_mode_middleware(handler, event, data):
-    if SERVICE_MODE and event.message:
-        # Проверяем, является ли пользователь админом
-        user_id = event.message.from_user.id
+    if SERVICE_MODE and (event.message or event.callback_query):
+        user_id = event.message.from_user.id if event.message else event.callback_query.from_user.id
         if user_id not in ADMINS:
-            with suppress(TelegramForbiddenError):
+            if event.message:
                 await event.message.answer("⏳ Бот в режиме обслуживания. Попробуйте позже.")
+            elif event.callback_query:
+                await event.callback_query.answer("⏳ Бот в режиме обслуживания. Попробуйте позже.", show_alert=True)
             return
     return await handler(event, data)
 
@@ -416,21 +417,27 @@ async def timeout_middleware(handler, event, data):
             state_data = await state.get_data()
             last_activity_str = state_data.get('last_activity')
 
-            # Обработка времени активности
             try:
                 last_activity = datetime.fromisoformat(last_activity_str)
             except (ValueError, TypeError):
                 last_activity = datetime.min
-                logging.warning(f"Invalid last_activity format for user {event.from_user.id}")
+                # Исправление здесь:
+                user_id = "unknown"
+                if event.message:
+                    user_id = event.message.from_user.id
+                elif event.callback_query:
+                    user_id = event.callback_query.from_user.id
+                logging.warning(f"Invalid last_activity format for user {user_id}")
 
-            # Проверка таймаута (30 минут)
             if datetime.now() - last_activity > timedelta(minutes=20):
                 await state.clear()
-                if isinstance(event, (types.Message, types.CallbackQuery)):
-                    await event.answer("🕒 Сессия истекла. Начните заново.")
+                # Исправление здесь:
+                if event.message:
+                    await event.message.answer("🕒 Сессия истекла. Начните заново.")
+                elif event.callback_query:
+                    await event.callback_query.message.answer("🕒 Сессия истекла. Начните заново.")
                 return
 
-            # Обновление времени активности
             await state.update_data(last_activity=datetime.now().isoformat())
 
     return await handler(event, data)
