@@ -528,8 +528,8 @@ async def process_barcode_image(photo: types.PhotoSize) -> str:
         return article, None
         
     except Exception as e:
-        logging.error(f"Barcode processing error: {str(e)}")
-        return None, f"Ошибка обработки: {str(e)}"
+        logging.exception(f"Error processing barcode image: {str(e)}")
+        return None, f"Ошибка обработки изображения: {str(e)}"
 
 
 
@@ -704,6 +704,15 @@ async def handle_client_order(message: types.Message, state: FSMContext):
 @dp.message(OrderStates.article_input)
 async def process_article(message: types.Message, state: FSMContext):
     """Обработка ввода артикула (текст)"""
+    if message.photo:
+        return
+        
+    # Проверяем наличие текста
+    if not message.text:
+        await message.answer("❌ Пожалуйста, введите артикул текстом или отправьте фото штрих-кода.")
+        return
+
+    
     # Если это команда отмены
     if message.text.lower() in ["отмена", "❌ отмена"]:
         await state.clear()
