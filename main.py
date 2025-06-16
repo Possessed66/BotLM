@@ -221,8 +221,6 @@ async def get_cached_data(cache_key: str) -> List[Dict]:
     return []
 
 
-
-
 def get_supplier_dates_sheet(shop_number: str) -> list:
     """Получение данных поставщика с простым кэшированием"""
     cache_key = f"supplier_{shop_number}"
@@ -235,7 +233,7 @@ def get_supplier_dates_sheet(shop_number: str) -> list:
         cache[cache_key] = pickle.dumps(data)
         return data
     except Exception as e:
-        print(f"Ошибка получения данных поставщика: {str(e)}")
+        print(f"[ERROR] Ошибка получения данных поставщика: {str(e)}")
         return []
 
 
@@ -483,26 +481,25 @@ async def get_product_info(article: str, shop: str) -> dict:
         product_data = gamma_index.get(key)
         
         if not product_data:
-            print(f"Товар не найден: артикул {article}, магазин {shop}")
-            return None
-        
-        if not product_data:
-            print(f"[ERROR] Не найдены данные о товаре для артикула: {article}, магазин: {shop}")
+            print(f"[INFO] Товар не найден: артикул {article}, магазин {shop}")
             return None
         
         print(f"[INFO] Найдены данные о товаре для артикула: {article}, магазин: {shop}")
         
-        # Остальная логика без изменений
         supplier_id = str(product_data.get("Номер осн. пост.", "")).strip()
-        supplier_sheet = get_supplier_dates_sheet(shop)
+        
+        # Получаем данные поставщика - это список словарей
+        supplier_list = get_supplier_dates_sheet(shop)
+        
+        # Ищем поставщика в списке
         supplier_data = next(
-            (item for item in supplier_sheet.data 
+            (item for item in supplier_list 
              if str(item.get("Номер осн. пост.", "")).strip() == supplier_id),
             None
         )
         
         if not supplier_data:
-            print(f"[ERROR] Не найдены данные поставщика для артикула: {article}, магазин: {shop}")
+            print(f"[INFO] Поставщик {supplier_id} не найден для магазина {shop}")
             return {
                 'Артикул': article,
                 'Название': product_data.get('Название', ''),
@@ -511,15 +508,12 @@ async def get_product_info(article: str, shop: str) -> dict:
                 'Поставщик': 'Товар РЦ'
             }
         
-        print(f"[INFO] Найдены данные поставщика для артикула: {article}, магазин: {shop}")
+        # Получаем название поставщика напрямую из словаря
+        supplier_name = supplier_data.get("Название осн. пост.", "Не указано").strip()
         
-        # Получаем название поставщика (следующий столбец после ID)
-        headers = supplier_sheet.headers
-        supplier_id_index = headers.index("Номер осн. пост.")
-        supplier_name = list(supplier_data.values())[supplier_id_index + 1]
+        # Парсим данные поставщика
         parsed_supplier = parse_supplier_data(supplier_data)
         order_date, delivery_date = calculate_delivery_date(parsed_supplier)
-        supplier_name = supplier_data.get("Название осн. пост.", "Не указано").strip()
         
         print(f"[INFO] Успешно получена информация для артикула: {article}, магазин: {shop}")
         
@@ -535,12 +529,9 @@ async def get_product_info(article: str, shop: str) -> dict:
             'Парсинг поставщика': parsed_supplier
         }
     
-    except (ValueError, IndexError) as e:
-        logging.error(f"Supplier name error: {str(e)}")
-        print(f"[ERROR] Ошибка при обработке поставщика: {str(e)}")
-        return None
     except Exception as e:
-        print(f"Ошибка в get_product_info: {str(e)}")
+        print(f"[ERROR] Ошибка в get_product_info: {str(e)}")
+        logging.error(f"Product info error: {str(e)}")
         return None
 
 
@@ -717,10 +708,10 @@ async def process_article_continuation(message: types.Message, state: FSMContext
     await message.answer("🔢 Введите количество товара:", reply_markup=cancel_only_keyboard())
     await state.set_state(OrderStates.quantity_input)
 
-def parse_supplier_data(record):
+def parse_supplier_data(record: dict):
     order_days = []
     for key in ['День выхода заказа', 'День выхода заказа 2', 'День выхода заказа 3']:
-        value = str(record.get(key, '')).strip()  # Преобразуем в строку перед strip()
+        value = str(record.get(key, '')).strip()
         if value and value.isdigit():
             order_days.append(int(value))
     
