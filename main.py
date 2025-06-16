@@ -418,11 +418,12 @@ async def get_user_data(user_id: str) -> Dict[str, Any]:
         users_data = pickle.loads(cache.get("users_data", b""))
         if users_data:
             for user in users_data:
-                if str(user.get("User ID", "")) == str(user_id):
+                if str(user.get("ID пользователя", "")) == str(user_id):
                     cache[cache_key] = user
                     return user
         return None
-    except:
+    except Exception as e:
+        print(f"Ошибка в get_user_data: {str(e)}")
         return None
 
 
