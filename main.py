@@ -30,7 +30,7 @@ logging.basicConfig(
 )
 
 # ===================== КОНФИГУРАЦИЯ СЕРВИСНОГО РЕЖИМА =====================
-SERVICE_MODE = False
+SERVICE_MODE = True
 ADMINS = [122086799, 5183727015]  # ID администраторов
 
 # ===================== КОНФИГУРАЦИЯ КЭША =====================
@@ -123,24 +123,7 @@ class AdminBroadcast(StatesGroup):
     manual_ids = State()  # Новое состояние для ввода списка ID
     confirmation = State()
 
-# ===================== ВСПОМОГАТЕЛЬНЫЙ КЛАСС =====================
-class FakeSheet:
-    """Имитация объекта листа для работы с кэшированными данными"""
-    def __init__(self, data):
-        self.data = data
-        self.headers = list(data[0].keys()) if data else []
-    
-    def find(self, value):
-        for idx, row in enumerate(self.data):
-            if str(value) in row.values():
-                return type('Cell', (), {'row': idx + 2})  # Эмулируем объект ячейки
-        raise gspread.exceptions.CellNotFound(value)
-    
-    def row_values(self, row):
-        return list(self.data[row-2].values()) if row-2 < len(self.data) else []
-    
-    def get_all_records(self):
-        return self.data
+
 
 
 # ===================== КЛАВИАТУРЫ =====================
@@ -229,32 +212,6 @@ async def toggle_service_mode(enable: bool):
 
 
 # ===================== СИСТЕМА КЭШИРОВАНИЯ =====================
-async def cache_sheet_data(sheet, cache_key: str):
-    """Кэширование данных из листа с сериализацией и индексацией"""
-    try:
-        print(f"⌛ Начало загрузки кэша для ключа: {cache_key}")
-        data = sheet.get_all_records()  # Получаем данные из Google Sheets
-        
-        # Создаем индекс на основе "Ключ" (артикул + магазин)
-        index = {item.get("Ключ", ""): item for item in data}
-        
-        # Сериализуем данные и индекс
-        serialized_data = pickle.dumps(data)
-        serialized_index = pickle.dumps(index)
-        
-        # Сохраняем в кэш
-        cache[cache_key] = serialized_data
-        cache[f"{cache_key}_index"] = serialized_index  # Сохраняем индекс отдельно
-        
-        print(f"📥 Успешно загружено в кэш: {cache_key} ({len(data)} записей)")
-        print(f"📥 Индекс сохранен: {cache_key}_index ({len(index)} записей)")
-    except Exception as e:
-        print(f"🔥 Ошибка загрузки {cache_key}: {str(e)}")
-        raise
-
-
-
-
 async def get_cached_data(cache_key: str) -> List[Dict]:
     print(f"[DEBUG] Получение данных из кэша: {cache_key}")
     if cache_key in cache:
@@ -266,49 +223,49 @@ async def get_cached_data(cache_key: str) -> List[Dict]:
 
 
 
-def get_supplier_dates_sheet(shop_number: str) -> FakeSheet:
-    """Получение данных поставщика с индексацией"""
+def get_supplier_dates_sheet(shop_number: str) -> list:
+    """Получение данных поставщика с простым кэшированием"""
     cache_key = f"supplier_{shop_number}"
-    print(cache_key)
     if cache_key in cache:
-        # Десериализация и создание FakeSheet
-        data = pickle.loads(cache[cache_key])
-        return FakeSheet(data)
+        return pickle.loads(cache[cache_key])
+    
     try:
         sheet = orders_spreadsheet.worksheet(f"Даты выходов заказов {shop_number}")
         data = sheet.get_all_records()
-        # Сериализация и сохранение в кэш
         cache[cache_key] = pickle.dumps(data)
-        return FakeSheet(data)
+        return data
     except Exception as e:
-        print(f"[ERROR] Ошибка получения данных поставщика для магазина {shop_number}: {str(e)}")
-        return FakeSheet([])
-
-
-
-
-async def cache_supplier_data(shop: str):
-    """Кэширование данных поставщиков для магазина"""
-    
-    cache_key = f"supplier_{shop}"
-    try:
-        sheet = get_supplier_dates_sheet(shop)
-        data = sheet.get_all_records()
-        serialized_data = pickle.dumps(data)  # Сериализация данных
-        cache[cache_key] = serialized_data  # Сохранение сериализованных данных
-        print(f"📦 Загружено поставщиков для магазина {shop}: {len(data)}")
-    except Exception as e:
-        print(f"⚠️ Ошибка загрузки поставщиков для магазина {shop}: {str(e)}")
-
+        print(f"Ошибка получения данных поставщика: {str(e)}")
+        return []
 
 
 async def preload_cache(_=None):
     """Предзагрузка только необходимых данных"""
     try:
-        await cache_sheet_data(users_sheet, "users")
-        print("Кэш пользователи, загружен")
-        await cache_sheet_data(gamma_cluster_sheet, "gamma_cluster")
-        print("Кэш гамма, загружен")
+        # Кэшируем пользователей как список словарей
+        users_records = users_sheet.get_all_records()
+        cache["users_data"] = pickle.dumps(users_records)
+        print(f"👥 Кэш пользователей загружен: {len(users_records)} записей")
+
+        # Кэшируем товары в оптимизированном формате
+        gamma_records = gamma_cluster_sheet.get_all_records()
+        gamma_index = {}
+        
+        for item in gamma_records:
+            article = str(item.get("Артикул", "")).strip()
+            shop = str(item.get("Магазин", "")).strip()
+            if article and shop:
+                # Используем кортеж как ключ для быстрого поиска
+                key = (article, shop)
+                gamma_index[key] = {
+                    "Название": item.get("Название", ""),
+                    "Отдел": item.get("Отдел", ""),
+                    "Номер осн. пост.": item.get("Номер осн. пост.", "")
+                }
+        
+        cache["gamma_index"] = pickle.dumps(gamma_index)
+        print(f"📦 Кэш товаров загружен: {len(gamma_index)} записей")
+        
     except Exception as e:
         print(f"⚠️ Ошибка загрузки кэша: {str(e)}")
         raise
@@ -451,20 +408,20 @@ async def timeout_middleware(handler, event, data):
 
 # ===================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====================
 async def get_user_data(user_id: str) -> Dict[str, Any]:
+    """Получение данных пользователя с простым кэшированием"""
     cache_key = f"user_{user_id}"
     if cache_key in cache:
         return cache[cache_key]
     
     try:
-        cell = users_sheet.find(user_id)
-        user_data = {
-            'shop': users_sheet.cell(cell.row, 5).value,
-            'name': users_sheet.cell(cell.row, 2).value,
-            'surname': users_sheet.cell(cell.row, 3).value,
-            'position': users_sheet.cell(cell.row, 4).value
-        }
-        cache[cache_key] = user_data
-        return user_data
+        # Линейный поиск по кэшированным данным
+        users_data = pickle.loads(cache.get("users_data", b""))
+        if users_data:
+            for user in users_data:
+                if str(user.get("User ID", "")) == str(user_id):
+                    cache[cache_key] = user
+                    return user
+        return None
     except:
         return None
 
@@ -506,19 +463,13 @@ def calculate_delivery_date(supplier_data: dict) -> tuple:
 # ========================== ПАРСЕР ===========================
 async def get_product_info(article: str, shop: str) -> dict:
     try:
-        gamma_index = pickle.loads(cache.get(f"gamma_cluster_index", b""))
-        key = int(f"{article}{shop}")
+        gamma_index = pickle.loads(cache.get("gamma_index", b""))
+        key = (str(article).strip(), str(shop).strip())
         product_data = gamma_index.get(key)
+        
         if not product_data:
-            print("Не найден индекс")
-            # Резервный вариант: линейный поиск
-            gamma_data = pickle.loads(cache.get("gamma_cluster", b""))
-            product_data = next(
-                (item for item in gamma_data
-                 if str(item.get("Артикул", "")).strip() == str(article).strip()
-                 and str(item.get("Магазин", "")).strip() == str(shop).strip()),
-                None
-            )
+            print(f"Товар не найден: артикул {article}, магазин {shop}")
+            return None
         
         if not product_data:
             print(f"[ERROR] Не найдены данные о товаре для артикула: {article}, магазин: {shop}")
@@ -574,8 +525,7 @@ async def get_product_info(article: str, shop: str) -> dict:
         print(f"[ERROR] Ошибка при обработке поставщика: {str(e)}")
         return None
     except Exception as e:
-        logging.error(f"Product info error: {str(e)}")
-        print(f"[ERROR] Ошибка в get_product_info: {str(e)}")
+        print(f"Ошибка в get_product_info: {str(e)}")
         return None
 
 
