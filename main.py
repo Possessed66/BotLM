@@ -414,13 +414,27 @@ async def get_user_data(user_id: str) -> Dict[str, Any]:
         return cache[cache_key]
     
     try:
-        # Линейный поиск по кэшированным данным
+        # Получаем кэшированные данные всех пользователей
         users_data = pickle.loads(cache.get("users_data", b""))
-        if users_data:
-            for user in users_data:
-                if str(user.get("ID пользователя", "")) == str(user_id):
-                    cache[cache_key] = user
-                    return user
+        if not users_data:
+            # Если кэш пуст, загружаем данные
+            users_data = users_sheet.get_all_records()
+            cache["users_data"] = pickle.dumps(users_data)
+            print(f"👥 Загружено пользователей: {len(users_data)}")
+        
+        # Ищем пользователя в кэшированных данных
+        for user in users_data:
+            
+            if str(user.get("ID пользователя", "")).strip() == str(user_id).strip():
+                # Кэшируем найденного пользователя
+                user_data = {
+                    'shop': user.get("Номер магазина", ""),
+                    'name': user.get("Имя", ""),
+                    'surname': user.get("Фамилия", ""),
+                    'position': user.get("Должность", "")
+                }
+                cache[cache_key] = user_data
+                return user_data
         return None
     except Exception as e:
         print(f"Ошибка в get_user_data: {str(e)}")
