@@ -1,6 +1,11 @@
 import os
 import json
 import pickle
+import io
+import re
+from pyzbar.pyzbar import decode
+from PIL import Image
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
@@ -57,6 +62,9 @@ ORDERS_SPREADSHEET_NAME = "Копия Заказы МЗ 0.2"
 USERS_SHEET_NAME = "Пользователи"
 GAMMA_CLUSTER_SHEET = "Гамма кластер"
 LOGS_SHEET = "Логи"
+BARCODES_SHEET_NAME = "Штрих-коды"  # Название листа со штрих-кодами
+MAX_IMAGE_SIZE = 2_000_000  # 2MB максимальный размер изображения
+MAX_WORKERS = 4  # Максимальное количество потоков для обработки изображений
 
 # Конфигурация для веб-хуков
 # В секции конфигурации
@@ -94,6 +102,8 @@ try:
 except Exception as e:
     print(f"Ошибка инициализации: {str(e)}")
     exit()
+
+image_processor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
 
 
 # ===================== СОСТОЯНИЯ FSM =====================
@@ -264,6 +274,19 @@ async def preload_cache(_=None):
         cache["gamma_index"] = pickle.dumps(gamma_index)
         print(f"📦 Кэш товаров загружен: {len(gamma_index)} записей")
         
+        # ЗАГРУЖАЕМ ТАБЛИЦУ ШТРИХ-КОДОВ
+        barcodes_sheet = main_spreadsheet.worksheet(BARCODES_SHEET_NAME)
+        barcodes_data = barcodes_sheet.get_all_records()
+        barcodes_index = {}
+        
+        for record in barcodes_data:
+            barcode = str(record.get("Штрих-код", "")).strip()
+            article = str(record.get("Артикул", "")).strip()
+            if barcode and article:
+                barcodes_index[barcode] = article
+        
+        cache["barcodes_index"] = pickle.dumps(barcodes_index)
+        print(f"📊 Кэш штрих-кодов загружен: {len(barcodes_index)} записей")
     except Exception as e:
         print(f"⚠️ Ошибка загрузки кэша: {str(e)}")
         raise
@@ -473,6 +496,63 @@ def calculate_delivery_date(supplier_data: dict) -> tuple:
     )
 
 
+async def process_barcode_image(photo: types.PhotoSize) -> str:
+    """Обработка изображения со штрих-кодом"""
+    try:
+        # Скачиваем фото
+        file = await bot.get_file(photo.file_id)
+        image_data = await bot.download_file(file.file_path)
+        
+        # Проверка размера
+        if len(image_data) > MAX_IMAGE_SIZE:
+            return None, "Изображение слишком большое. Макс. размер 2MB"
+        
+        # Используем ThreadPoolExecutor для обработки в отдельном потоке
+        loop = asyncio.get_running_loop()
+        decoded_objects = await loop.run_in_executor(
+            image_processor, 
+            lambda: decode(Image.open(io.BytesIO(image_data)))
+        
+        if not decoded_objects:
+            return None, "Штрих-код не распознан. Попробуйте другое изображение"
+        
+        barcode_data = decoded_objects[0].data.decode("utf-8")
+        
+        # Получаем артикул из кэша
+        barcodes_index = pickle.loads(cache.get("barcodes_index", b""))
+        article = barcodes_index.get(barcode_data)
+        
+        if not article:
+            return None, f"Штрих-код {barcode_data} не найден в базе"
+        
+        return article, None
+        
+    except Exception as e:
+        logging.error(f"Barcode processing error: {str(e)}")
+        return None, f"Ошибка обработки: {str(e)}"
+
+
+
+@dp.message(Command("test_barcode"))
+async def test_barcode(message: types.Message):
+    """Тестовая команда для проверки штрих-кодов"""
+    if message.from_user.id not in ADMINS:
+        return
+        
+    try:
+        barcodes_index = pickle.loads(cache.get("barcodes_index", b""))
+        if not barcodes_index:
+            await message.answer("❌ Кэш штрих-кодов пуст")
+            return
+            
+        test_barcode = next(iter(barcodes_index.keys()))
+        article = barcodes_index[test_barcode]
+        await message.answer(f"Тестовый штрих-код: {test_barcode}\nСоответствует артикулу: {article}")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка тестирования: {str(e)}")
+
+
+
 # ========================== ПАРСЕР ===========================
 async def get_product_info(article: str, shop: str) -> dict:
     try:
@@ -623,8 +703,47 @@ async def handle_client_order(message: types.Message, state: FSMContext):
     
 @dp.message(OrderStates.article_input)
 async def process_article(message: types.Message, state: FSMContext):
+    """Обработка ввода артикула (текст)"""
+    # Если это команда отмены
+    if message.text.lower() in ["отмена", "❌ отмена"]:
+        await state.clear()
+        await message.answer("🔄 Операция отменена", reply_markup=main_menu_keyboard())
+        return
+        
     article = message.text.strip()
-    await state.update_data(article=article)    
+    
+    # Проверка формата артикула
+    if not re.match(r'^\d{4,10}$', article):
+        await message.answer("❌ Неверный формат артикула. Артикул должен состоять из 4-10 цифр. Попробуйте еще раз:")
+        return
+        
+    await state.update_data(article=article)
+    
+    await message.answer(
+        "📌 Выберите магазин для заказа:",
+        reply_markup=shop_selection_keyboard()
+    )
+    await state.set_state(OrderStates.shop_selection)
+
+
+
+@dp.message(OrderStates.article_input, F.photo)
+async def handle_barcode_order(message: types.Message, state: FSMContext):
+    """Обработка фото штрих-кода для заказа"""
+    await state.update_data(last_activity=datetime.now().isoformat())
+    
+    # Используем самое качественное изображение
+    photo = message.photo[-1]
+    article, error = await process_barcode_image(photo)
+    
+    if error:
+        await message.answer(error)
+        return
+    
+    await state.update_data(article=article)
+    await message.answer(f"✅ Распознан артикул: {article}")
+    
+    # Переходим к выбору магазина
     await message.answer(
         "📌 Выберите магазин для заказа:",
         reply_markup=shop_selection_keyboard()
@@ -864,11 +983,59 @@ async def handle_info_request(message: types.Message, state: FSMContext):
     await state.set_state(InfoRequest.article_input)
 
 
-@dp.message(InfoRequest.article_input)
-async def process_info_request(message: types.Message, state: FSMContext):
-    await message.answer("🔄 Загружаю модуль", reply_markup=ReplyKeyboardRemove())
+
+@dp.message(InfoRequest.article_input, F.photo)
+async def handle_barcode_info(message: types.Message, state: FSMContext):
+    """Обработка фото штрих-кода для запроса информации"""
     await state.update_data(last_activity=datetime.now().isoformat())
+    
+    # Используем самое качественное изображение
+    photo = message.photo[-1]
+    article, error = await process_barcode_image(photo)
+    
+    if error:
+        await message.answer(error)
+        return
+    
+    data = await state.get_data()
+    user_shop = data['shop']
+    
+    # Получаем информацию о товаре
+    product_info = await get_product_info(article, user_shop)
+    if not product_info:
+        await message.answer("❌ Товар не найден")
+        await state.clear()
+        return
+
+    response = (
+        f"🔍 Информация о товаре:\n"
+        f"Магазин: {user_shop}\n"
+        f"📦Артикул: {product_info['Артикул']}\n"
+        f"🏷️Название: {product_info['Название']}\n"
+        f"🔢Отдел: {product_info['Отдел']}\n"
+        f"📅Ближайшая дата заказа: {product_info['Дата заказа']}\n"
+        f"🚚Ожидаемая дата поставки: {product_info['Дата поставки']}\n"
+        f"🏭 Поставщик: {product_info['Поставщик']}" 
+    )
+    
+    await message.answer(response, reply_markup=main_menu_keyboard())
+    await state.clear()
+
+
+@dp.message(InfoRequest.article_input)
+async def process_info_request_text(message: types.Message, state: FSMContext):
+    """Обработка текстового запроса информации"""
+    # Если это фото - пропускаем (уже есть отдельный обработчик)
+    if message.photo:
+        return
+        
     article = message.text.strip()
+    
+    # Проверка формата артикула
+    if not re.match(r'^\d{4,10}$', article):
+        await message.answer("❌ Неверный формат артикула. Артикул должен состоять из 4-10 цифр. Попробуйте еще раз:")
+        return
+        
     data = await state.get_data()
     user_shop = data['shop']
     
