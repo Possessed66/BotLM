@@ -511,7 +511,7 @@ async def process_barcode_image(photo: types.PhotoSize) -> str:
         loop = asyncio.get_running_loop()
         decoded_objects = await loop.run_in_executor(
             image_processor, 
-            lambda: decode(Image.open(io.BytesIO(image_data)))
+            lambda: decode(Image.open(io.BytesIO(image_data))))
         
         if not decoded_objects:
             return None, "Штрих-код не распознан. Попробуйте другое изображение"
