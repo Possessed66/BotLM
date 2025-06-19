@@ -3,6 +3,7 @@ import json
 import pickle
 import io
 import re
+import gc
 from pyzbar.pyzbar import decode
 from PIL import Image
 from concurrent.futures import ThreadPoolExecutor
@@ -117,6 +118,7 @@ class Registration(StatesGroup):
 class OrderStates(StatesGroup):
     article_input = State()
     shop_selection = State()  # Новое состояние для выбора магазина
+    barcode_scan = State()
     shop_input = State() 
     quantity_input = State()
     confirmation = State()
@@ -154,9 +156,11 @@ def cancel_only_keyboard():
 
 def article_input_keyboard():
     builder = ReplyKeyboardBuilder()
+    builder.button(text="🔍 Сканировать штрих-код")
+    builder.button(text="⌨️ Ввести вручную")
     builder.button(text="❌ Отмена")
     builder.button(text="↩️ Назад")
-    builder.adjust(2)
+    builder.adjust(2, 2)
     return builder.as_markup(resize_keyboard=True)
 
 
@@ -496,30 +500,52 @@ def calculate_delivery_date(supplier_data: dict) -> tuple:
     )
 
 
-async def process_barcode_image(photo: types.PhotoSize) -> str:
-    """Обработка изображения со штрих-кодом"""
+async def process_barcode_image(photo: types.PhotoSize) -> (str, str):
+    """Обработка изображения со штрих-кодом с улучшенной обработкой ошибок"""
     try:
+        # Проверяем кэш штрих-кодов
+        if "barcodes_index" not in cache or not cache["barcodes_index"]:
+            return None, "Система штрих-кодов не настроена"
+        
         # Скачиваем фото
         file = await bot.get_file(photo.file_id)
         image_data = await bot.download_file(file.file_path)
         
         # Проверка размера
         if len(image_data) > MAX_IMAGE_SIZE:
-            return None, "Изображение слишком большое. Макс. размер 2MB"
+            return None, f"Изображение слишком большое (> {MAX_IMAGE_SIZE//1024}KB)"
         
-        # Используем ThreadPoolExecutor для обработки в отдельном потоке
+        # Обработка в отдельном потоке
         loop = asyncio.get_running_loop()
-        decoded_objects = await loop.run_in_executor(
-            image_processor, 
-            lambda: decode(Image.open(io.BytesIO(image_data))))
+        
+        # Используем контекстный менеджер для работы с памятью
+        with io.BytesIO(image_data) as buffer:
+            image = await loop.run_in_executor(
+                image_processor, 
+                Image.open, 
+                buffer
+            )
+            
+            # Оптимизация памяти
+            image = image.convert('L')  # Градации серого
+            image.thumbnail((800, 800))
+            
+            decoded_objects = await loop.run_in_executor(
+                image_processor, 
+                decode, 
+                image
+            )
+            
+            # Явно освобождаем ресурсы
+            del image
         
         if not decoded_objects:
-            return None, "Штрих-код не распознан. Попробуйте другое изображение"
+            return None, "Штрих-код не распознан"
         
-        barcode_data = decoded_objects[0].data.decode("utf-8")
+        barcode_data = decoded_objects[0].data.decode("utf-8").strip()
         
         # Получаем артикул из кэша
-        barcodes_index = pickle.loads(cache.get("barcodes_index", b""))
+        barcodes_index = pickle.loads(cache["barcodes_index"])
         article = barcodes_index.get(barcode_data)
         
         if not article:
@@ -528,9 +554,10 @@ async def process_barcode_image(photo: types.PhotoSize) -> str:
         return article, None
         
     except Exception as e:
-        logging.exception(f"Error processing barcode image: {str(e)}")
-        return None, f"Ошибка обработки изображения: {str(e)}"
-
+        logging.exception(f"Barcode processing error: {str(e)}")
+        return None, "Ошибка обработки изображения"
+    finally:
+        gc.collect()
 
 
 @dp.message(Command("test_barcode"))
@@ -679,7 +706,6 @@ async def process_shop(message: types.Message, state: FSMContext):
 
 @dp.message(F.text == "🛒 Заказ под клиента")
 async def handle_client_order(message: types.Message, state: FSMContext):
-    await message.answer("🔄 Загружаю модуль", reply_markup=ReplyKeyboardRemove())
     await state.update_data(last_activity=datetime.now().isoformat())
     user_data = await get_user_data(str(message.from_user.id))
     
@@ -693,30 +719,64 @@ async def handle_client_order(message: types.Message, state: FSMContext):
         user_position=user_data['position']
     )
     
-    # Важные строки:
     await message.answer(
-        "🔢 Введите артикул товара:",
+        "📦 Как вы хотите ввести артикул товара?",
         reply_markup=article_input_keyboard()
     )
     await log_user_activity(message.from_user.id, "Заказ под клиента", "order")
     await state.set_state(OrderStates.article_input)  # Установка состояния
-    
+
+
+@dp.message(OrderStates.barcode_scan, F.text == "❌ Отмена")
+async def cancel_scan(message: types.Message, state: FSMContext):
+    await message.answer(
+        "❌ Сканирование отменено",
+        reply_markup=article_input_keyboard()
+    )
+    await state.set_state(OrderStates.article_input)
+
+
+@dp.message(OrderStates.article_input, F.text == "🔍 Сканировать штрих-код")
+async def handle_scan_choice(message: types.Message, state: FSMContext):
+    await message.answer(
+        "📸 Отправьте фото штрих-кода товара\n\n"
+        "Советы для лучшего распознавания:\n"
+        "- Убедитесь, что штрих-код хорошо освещен\n"
+        "- Держите камеру прямо напротив штрих-кода\n"
+        "- Избегайте бликов и теней",
+        reply_markup=cancel_only_keyboard()
+    )
+    await state.set_state(OrderStates.barcode_scan)
+
+@dp.message(OrderStates.article_input, F.text == "⌨️ Ввести вручную")
+async def handle_manual_choice(message: types.Message, state: FSMContext):
+    await message.answer(
+        "🔢 Введите артикул товара вручную:",
+        reply_markup=article_input_keyboard()
+    )
+
+
 @dp.message(OrderStates.article_input)
-async def process_article(message: types.Message, state: FSMContext):
-    """Обработка ввода артикула (текст)"""
-    if message.photo:
+async def process_article_manual(message: types.Message, state: FSMContext):
+    # Пропускаем системные команды
+    if message.text in ["🔍 Сканировать штрих-код", "⌨️ Ввести вручную", "❌ Отмена", "↩️ Назад"]:
         return
         
-    # Проверяем наличие текста
-    if not message.text:
-        await message.answer("❌ Пожалуйста, введите артикул текстом или отправьте фото штрих-кода.")
-        return
-
-    
-    # Если это команда отмены
+    # Обработка отмены
     if message.text.lower() in ["отмена", "❌ отмена"]:
         await state.clear()
         await message.answer("🔄 Операция отменена", reply_markup=main_menu_keyboard())
+        return
+        
+    # Обработка возврата
+    if message.text == "↩️ Назад":
+        await state.clear()
+        await message.answer("🔙 Возврат в главное меню", reply_markup=main_menu_keyboard())
+        return
+        
+    # Проверка наличия текста
+    if not message.text:
+        await message.answer("❌ Пожалуйста, введите артикул.")
         return
         
     article = message.text.strip()
@@ -736,28 +796,47 @@ async def process_article(message: types.Message, state: FSMContext):
 
 
 
-@dp.message(OrderStates.article_input, F.photo)
-async def handle_barcode_order(message: types.Message, state: FSMContext):
-    """Обработка фото штрих-кода для заказа"""
-    await state.update_data(last_activity=datetime.now().isoformat())
-    
-    # Используем самое качественное изображение
-    photo = message.photo[-1]
-    article, error = await process_barcode_image(photo)
-    
-    if error:
-        await message.answer(error)
-        return
-    
-    await state.update_data(article=article)
-    await message.answer(f"✅ Распознан артикул: {article}")
-    
-    # Переходим к выбору магазина
-    await message.answer(
-        "📌 Выберите магазин для заказа:",
-        reply_markup=shop_selection_keyboard()
-    )
-    await state.set_state(OrderStates.shop_selection)
+@dp.message(OrderStates.barcode_scan, F.photo)
+async def handle_barcode_scan(message: types.Message, state: FSMContext):
+    try:
+        # Показываем индикатор загрузки
+        processing_msg = await message.answer("🔍 Обработка изображения...")
+        
+        # Используем самое качественное изображение
+        photo = message.photo[-1]
+        article, error = await process_barcode_image(photo)
+        
+        # Удаляем сообщение о обработке
+        await processing_msg.delete()
+        
+        if error:
+            await message.answer(
+                f"❌ {error}\n\nПопробуйте еще раз или введите артикул вручную.",
+                reply_markup=article_input_keyboard()
+            )
+            await state.set_state(OrderStates.article_input)
+            return
+            
+        await state.update_data(article=article)
+        await message.answer(
+            f"✅ Штрих-код распознан!\nАртикул: {article}",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        
+        # Переходим к выбору магазина
+        await message.answer(
+            "📌 Выберите магазин для заказа:",
+            reply_markup=shop_selection_keyboard()
+        )
+        await state.set_state(OrderStates.shop_selection)
+        
+    except Exception as e:
+        logging.exception("Barcode scan error")
+        await message.answer(
+            "⚠️ Произошла ошибка при обработке изображения. Попробуйте еще раз или введите артикул вручную.",
+            reply_markup=article_input_keyboard()
+        )
+        await state.set_state(OrderStates.article_input)
 
 
 @dp.message(OrderStates.shop_input)
