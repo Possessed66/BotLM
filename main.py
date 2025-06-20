@@ -136,70 +136,88 @@ class AdminBroadcast(StatesGroup):
     confirmation = State()
 
 
+class AdminStates(StatesGroup):
+    panel = State()
+    broadcast_message = State()
+    broadcast_target = State()
+    manual_ids_input = State()
+    service_mode_manage = State()
+    cache_manage = State()
+    logs_view = State()
 
 
 # ===================== КЛАВИАТУРЫ =====================
-def main_menu_keyboard():
+def create_keyboard(buttons: List[str], sizes: tuple, resize=True, one_time=False):
+    """Универсальный конструктор клавиатур"""
     builder = ReplyKeyboardBuilder()
-    builder.button(text="📋 Запрос информации")
-    builder.button(text="📦 Проверка стока")
-    builder.button(text="🛒 Заказ под клиента")
-    builder.adjust(2, 1)
-    return builder.as_markup(resize_keyboard=True)
+    for button in buttons:
+        builder.button(text=button)
+    builder.adjust(*sizes)
+    return builder.as_markup(
+        resize_keyboard=resize,
+        one_time_keyboard=one_time
+    )
 
-
-def cancel_only_keyboard():
-    builder = ReplyKeyboardBuilder()
-    builder.button(text="❌ Отмена")
-    return builder.as_markup(resize_keyboard=True)
-
+def main_menu_keyboard(user_id: int = None):
+    """Главное меню с учетом прав пользователя"""
+    buttons = [
+        "📋 Запрос информации",
+        "📦 Проверка стока",
+        "🛒 Заказ под клиента"
+    ]
+    
+    # Добавляем админ-панель для администраторов
+    if user_id and user_id in ADMINS:
+        buttons.append("🛠 Админ-панель")
+    
+    return create_keyboard(buttons, (2, 1, 1))
 
 def article_input_keyboard():
-    builder = ReplyKeyboardBuilder()
-    builder.button(text="🔍 Сканировать штрих-код")
-    builder.button(text="⌨️ Ввести вручную")
-    builder.button(text="❌ Отмена")
-    builder.button(text="↩️ Назад")
-    builder.adjust(2, 2)
-    return builder.as_markup(resize_keyboard=True)
-
-
-def confirm_keyboard():
-    builder = ReplyKeyboardBuilder()
-    builder.button(text="✅ Подтвердить")
-    builder.button(text="✏️ Исправить количество")
-    builder.button(text="❌ Отмена")
-    builder.adjust(2, 1)
-    return builder.as_markup(resize_keyboard=True)
-
-
-def broadcast_confirmation_keyboard():
-    builder = ReplyKeyboardBuilder()
-    builder.button(text="✅ Подтвердить рассылку")
-    builder.button(text="✏️ Редактировать сообщение")
-    builder.button(text="❌ Отменить рассылку")
-    builder.adjust(1, 2)
-    return builder.as_markup(resize_keyboard=True)
-
+    return create_keyboard(
+        ["🔍 Сканировать штрих-код", "⌨️ Ввести вручную", "❌ Отмена", "↩️ Назад"],
+        (2, 2)
+    )
 
 def shop_selection_keyboard():
-    builder = ReplyKeyboardBuilder()
-    builder.button(text="Использовать мой магазин")
-    builder.button(text="Выбрать другой")
-    builder.button(text="❌ Отмена")
-    builder.adjust(2, 1)
-    return builder.as_markup(resize_keyboard=True)
+    return create_keyboard(
+        ["Использовать мой магазин", "Выбрать другой", "❌ Отмена"],
+        (2, 1)
+    )
 
+def confirm_keyboard():
+    return create_keyboard(
+        ["✅ Подтвердить", "✏️ Исправить количество", "❌ Отмена"],
+        (2, 1)
+    )
 
-def target_selection_keyboard():
-    builder = ReplyKeyboardBuilder()
-    builder.button(text="Всем")
-    builder.button(text="Вручную")
-    builder.button(text="❌ Отмена")
-    builder.adjust(2)
-    return builder.as_markup(resize_keyboard=True)
+def admin_panel_keyboard():
+    return create_keyboard(
+        [
+            "📊 Статистика", "📢 Рассылка", 
+            "🔄 Обновить кэш", "📝 Просмотр логов",
+            "🔧 Сервисный режим", "🔙 Главное меню"
+        ],
+        (2, 2, 2)
+    )
 
+def broadcast_target_keyboard():
+    return create_keyboard(
+        ["Всем пользователям", "По магазинам", "По отделам", "Вручную", "❌ Отмена"],
+        (2, 2, 1)
+    )
 
+def service_mode_keyboard():
+    return create_keyboard(
+        ["🟢 Включить сервисный режим", "🔴 Выключить сервисный режим", "🔙 Назад"],
+        (2, 1)
+    )
+
+def back_to_admin_keyboard():
+    return create_keyboard(["🔙 В админ-панель"], (1,))
+
+def cancel_keyboard():
+    return create_keyboard(["❌ Отмена"], (1,))
+    
 
 # ===================== СЕРВИСНЫЙ РЕЖИМ =====================
 async def notify_admins(message: str):
@@ -221,6 +239,150 @@ async def toggle_service_mode(enable: bool):
     SERVICE_MODE = enable
     status = "ВКЛЮЧЕН" if enable else "ВЫКЛЮЧЕН"
     await notify_admins(f"🛠 Сервисный режим {status}")
+
+
+# ===================== ОБРАБОТЧИКИ АДМИН-ПАНЕЛИ =====================
+
+@dp.message(F.text == "🛠 Админ-панель")
+async def handle_admin_panel(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMINS:
+        return
+    
+    await message.answer(
+        "🛠 Панель администратора:",
+        reply_markup=admin_panel_keyboard()
+    )
+    await state.set_state(AdminStates.panel)
+
+@dp.message(AdminStates.panel, F.text == "📊 Статистика")
+async def handle_admin_stats(message: types.Message):
+    try:
+        # Статистика пользователей
+        users_count = len(pickle.loads(cache.get("users_data", b"")))
+        
+        # Статистика использования
+        stats_sheet = main_spreadsheet.worksheet(STATSS_SHEET_NAME)
+        stats_data = stats_sheet.get_all_records()
+        orders_count = sum(1 for r in stats_data if r['Тип события'] == 'order')
+        
+        # Статистика сервера
+        import psutil
+        cpu_usage = psutil.cpu_percent()
+        memory_usage = psutil.virtual_memory().percent
+        
+        response = (
+            f"📊 Статистика бота:\n\n"
+            f"• Пользователей: {users_count}\n"
+            f"• Заказов оформлено: {orders_count}\n"
+            f"• Логов действий: {len(stats_data)}\n\n"
+            f"⚙️ Состояние сервера:\n"
+            f"• Загрузка CPU: {cpu_usage}%\n"
+            f"• Использование RAM: {memory_usage}%\n"
+            f"• Сервисный режим: {'ВКЛ' if SERVICE_MODE else 'ВЫКЛ'}"
+        )
+        await message.answer(response, reply_markup=back_to_admin_keyboard())
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {str(e)}", reply_markup=admin_panel_keyboard())
+
+@dp.message(AdminStates.panel, F.text == "📢 Рассылка")
+async def handle_broadcast_start(message: types.Message, state: FSMContext):
+    await message.answer(
+        "✉️ Введите сообщение для рассылки:",
+        reply_markup=cancel_keyboard()
+    )
+    await state.set_state(AdminStates.broadcast_message)
+
+@dp.message(AdminStates.broadcast_message)
+async def handle_broadcast_message(message: types.Message, state: FSMContext):
+    if message.text == "❌ Отмена":
+        await state.clear()
+        await message.answer("❌ Рассылка отменена", reply_markup=admin_panel_keyboard())
+        await state.set_state(AdminStates.panel)
+        return
+        
+    await state.update_data(broadcast_message=message.html_text)
+    await message.answer(
+        "🎯 Выберите аудиторию для рассылки:",
+        reply_markup=broadcast_target_keyboard()
+    )
+    await state.set_state(AdminStates.broadcast_target)
+
+@dp.message(AdminStates.broadcast_target)
+async def handle_broadcast_target(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    
+    if message.text == "❌ Отмена":
+        await state.clear()
+        await message.answer("❌ Рассылка отменена", reply_markup=admin_panel_keyboard())
+        await state.set_state(AdminStates.panel)
+        return
+        
+    # Рассылка всем пользователям
+    if message.text == "Всем пользователям":
+        users = users_sheet.col_values(1)[1:]
+        await send_broadcast(data['broadcast_message'], users)
+        await message.answer(f"✅ Рассылка отправлена {len(users)} пользователям", reply_markup=admin_panel_keyboard())
+        await state.set_state(AdminStates.panel)
+    
+    # Другие типы рассылки (реализация аналогична)
+    # ...
+
+@dp.message(AdminStates.panel, F.text == "🔄 Обновить кэш")
+async def handle_cache_refresh(message: types.Message):
+    try:
+        await preload_cache()
+        await message.answer("✅ Кэш успешно обновлен!", reply_markup=admin_panel_keyboard())
+    except Exception as e:
+        await message.answer(f"❌ Ошибка обновления кэша: {str(e)}", reply_markup=admin_panel_keyboard())
+
+@dp.message(AdminStates.panel, F.text == "📝 Просмотр логов")
+async def handle_logs_view(message: types.Message, state: FSMContext):
+    try:
+        # Получаем последние 20 записей логов
+        logs = logs_sheet.get_all_values()
+        if len(logs) > 20:
+            logs = logs[-20:]
+        
+        log_text = "📝 Последние действия в системе:\n\n"
+        for log in logs:
+            log_text += f"{log[0]} | {log[1]} | {log[2]}\n"
+        
+        await message.answer(log_text[:4000], reply_markup=admin_panel_keyboard())
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {str(e)}", reply_markup=admin_panel_keyboard())
+
+@dp.message(AdminStates.panel, F.text == "🔧 Сервисный режим")
+async def handle_service_mode(message: types.Message, state: FSMContext):
+    status = "🟢 ВКЛЮЧЕН" if SERVICE_MODE else "🔴 ВЫКЛЮЧЕН"
+    await message.answer(
+        f"🛠 Текущий статус сервисного режима: {status}\nВыберите действие:",
+        reply_markup=service_mode_keyboard()
+    )
+    await state.set_state(AdminStates.service_mode_manage)
+
+@dp.message(AdminStates.service_mode_manage, F.text == "🟢 Включить сервисный режим")
+async def enable_service_mode(message: types.Message, state: FSMContext):
+    global SERVICE_MODE
+    SERVICE_MODE = True
+    await broadcast("🔧 Бот переходит в сервисный режим. Некоторые функции временно недоступны.")
+    await message.answer("✅ Сервисный режим включен", reply_markup=admin_panel_keyboard())
+    await state.set_state(AdminStates.panel)
+
+@dp.message(AdminStates.service_mode_manage, F.text == "🔴 Выключить сервисный режим")
+async def disable_service_mode(message: types.Message, state: FSMContext):
+    global SERVICE_MODE
+    SERVICE_MODE = False
+    await broadcast("✅ Сервисный режим отключен. Все функции доступны.")
+    await message.answer("✅ Сервисный режим выключен", reply_markup=admin_panel_keyboard())
+    await state.set_state(AdminStates.panel)
+
+@dp.message(AdminStates.service_mode_manage, F.text == "🔙 Назад")
+async def back_from_service_mode(message: types.Message, state: FSMContext):
+    await message.answer("🔙 Возврат в админ-панель", reply_markup=admin_panel_keyboard())
+    await state.set_state(AdminStates.panel)
+
+
 
 
 
@@ -253,6 +415,11 @@ def get_supplier_dates_sheet(shop_number: str) -> list:
 
 async def preload_cache(_=None):
     """Предзагрузка только необходимых данных"""
+    try:
+        stats_sheet = main_spreadsheet.worksheet(STATSS_SHEET_NAME)
+        cache["stats_data"] = pickle.dumps(stats_sheet.get_all_records())
+    except:
+        pass
     try:
         # Кэшируем пользователей как список словарей
         users_records = users_sheet.get_all_records()
@@ -648,14 +815,14 @@ async def start_handler(message: types.Message, state: FSMContext):
     await state.update_data(last_activity=datetime.now().isoformat())
     user_data = await get_user_data(str(message.from_user.id))
     if user_data:
-        await message.answer("ℹ️ Вы уже зарегистрированы!", reply_markup=main_menu_keyboard())
+        await message.answer("ℹ️ Вы в главном меню:", reply_markup=main_menu_keyboard(message.from_user.id))
         return
     await message.answer(
         "👋 Добро пожаловать! Введите ваше имя:", reply_markup=types.ReplyKeyboardRemove()
     )
     await log_user_activity(message.from_user.id, "/start", "registration")
     await state.set_state(Registration.name)
-
+    
 
 @dp.message(Registration.name)
 async def process_name(message: types.Message, state: FSMContext):
@@ -704,6 +871,29 @@ async def process_shop(message: types.Message, state: FSMContext):
         await log_error(str(message.from_user.id), str(e))
 
 
+@dp.message(F.text == "↩️ Назад")
+async def handle_back(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer(
+        "🔙 Возврат в главное меню",
+        reply_markup=main_menu_keyboard(message.from_user.id)
+    )
+
+
+@dp.message(F.text == "🔙 Главное меню")
+async def handle_back_to_main(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer(
+        "🔙 Возврат в главное меню",
+        reply_markup=main_menu_keyboard(message.from_user.id)
+    )
+
+
+@dp.message(F.text == "🔙 В админ-панель")
+async def handle_back_to_admin(message: types.Message, state: FSMContext):
+    await handle_admin_panel(message, state)
+
+
 @dp.message(F.text == "🛒 Заказ под клиента")
 async def handle_client_order(message: types.Message, state: FSMContext):
     await state.update_data(last_activity=datetime.now().isoformat())
@@ -720,7 +910,7 @@ async def handle_client_order(message: types.Message, state: FSMContext):
     )
     
     await message.answer(
-        "📦 Как вы хотите ввести артикул товара?",
+        "📦 Выберите способ ввода артикула:",
         reply_markup=article_input_keyboard()
     )
     await log_user_activity(message.from_user.id, "Заказ под клиента", "order")
@@ -912,7 +1102,7 @@ async def process_article_continuation(message: types.Message, state: FSMContext
         supplier_name=product_info['Поставщик']
     )
     await message.answer(response)
-    await message.answer("🔢 Введите количество товара:", reply_markup=cancel_only_keyboard())
+    await message.answer("🔢 Введите количество товара:", reply_markup=cancel_keyboard())
     await state.set_state(OrderStates.quantity_input)
 
 def parse_supplier_data(record: dict):
@@ -941,13 +1131,13 @@ async def process_quantity(message: types.Message, state: FSMContext):
         
     await state.update_data(last_activity=datetime.now().isoformat())
     if not message.text.strip().isdigit():
-        await message.answer("❌ Введите число!", reply_markup=cancel_only_keyboard())
+        await message.answer("❌ Введите число!", reply_markup=cancel_keyboard())
         return
         
     data = await state.get_data()
     await state.update_data(quantity=int(message.text.strip()))
     # Запрос номера заказа или причины с клавиатурой отмены
-    await message.answer("Введите номер заказа или причину:", reply_markup=cancel_only_keyboard())
+    await message.answer("Введите номер заказа или причину:", reply_markup=cancel_keyboard())
     await state.set_state(OrderStates.order_reason_input)
 
 
@@ -967,6 +1157,7 @@ async def process_order_reason(message: types.Message, state: FSMContext):
     await state.update_data(order_reason=order_reason)
     # Вывод информации для подтверждения
     await message.answer(
+        "🔎 Проверьте данные заказа:\n"
         f"Магазин: {selected_shop}\n"
         f"📦 Артикул: {data['article']}\n"
         f"🏷️ Название: {data['product_name']}\n"
@@ -1154,6 +1345,37 @@ async def handle_stock_check(message: types.Message):
 
 
 
+@dp.message(Command("test_scan"))
+async def test_scan_command(message: types.Message):
+    """Тест работы сканера штрих-кодов"""
+    await message.answer("Отправьте фото штрих-кода для теста")
+    
+    # Сохраняем состояние для возврата
+    await state.set_data({"test_mode": True})
+    await state.set_state(OrderStates.barcode_scan)
+
+@dp.message(OrderStates.barcode_scan, F.photo)
+async def handle_test_scan(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    if not data.get("test_mode"):
+        await handle_barcode_scan(message, state)
+        return
+        
+    try:
+        processing_msg = await message.answer("🔍 Тестовая обработка...")
+        photo = message.photo[-1]
+        article, error = await process_barcode_image(photo)
+        await processing_msg.delete()
+        
+        if error:
+            await message.answer(f"❌ Ошибка: {error}")
+        else:
+            await message.answer(f"✅ Тест успешен! Распознан артикул: {article}")
+            
+    finally:
+        await state.clear()
+        await message.answer("🔙 Возврат в главное меню", reply_markup=main_menu_keyboard())
+
 # ===================== ОБНОВЛЕНИЕ КЭША =====================
 @dp.message(F.text == "/reload_cache")
 async def reload_cache_command(message: types.Message):
@@ -1290,44 +1512,20 @@ async def confirm_broadcast(message: types.Message, state: FSMContext):
     asyncio.create_task(send_broadcast(content, target, user_ids))
     await state.clear()
 
-async def send_broadcast(content: dict, target: str, user_ids: list = None):
-    if target == "all":
-        users = users_sheet.col_values(1)[1:]  # ID из колонки A
-    elif target == "manual":
-        users = user_ids  # Используем список ID
-    else:
-        users = []
-
+async def send_broadcast(message_text: str, user_ids: list):
+    """Улучшенная функция рассылки"""
     success = 0
     failed = 0
-    for user_id in users:
+    for user_id in user_ids:
         try:
-            if content['type'] == 'text':
-                await bot.send_message(
-                    chat_id=int(user_id),
-                    text=content['text'],
-                    parse_mode=None
-                )
-            elif content['type'] == 'photo':
-                await bot.send_photo(
-                    chat_id=int(user_id),
-                    photo=content['media'],
-                    caption=content.get('caption', ''),
-                    parse_mode=None
-                )
-            elif content['type'] == 'document':
-                await bot.send_document(
-                    chat_id=int(user_id),
-                    document=content['media'],
-                    caption=content.get('caption', ''),
-                    parse_mode=None
-                )
+            await bot.send_message(int(user_id), message_text)
             success += 1
-            await asyncio.sleep(0.1)  # Защита от ограничений Telegram
+            await asyncio.sleep(0.05)  # Ограничение частоты отправки
         except Exception as e:
             failed += 1
-            logging.error(f"Broadcast error to {user_id}: {str(e)}")
-    # Отправляем отчет админу
+            logging.error(f"Ошибка рассылки: {user_id} - {str(e)}")
+    
+    return success, failed
     await bot.send_message(
         chat_id=ADMINS[0],
         text=f"📊 Результаты рассылки:\n✅ Успешно: {success}\n❌ Не удалось: {failed}"
@@ -1350,7 +1548,10 @@ async def log_user_activity(user_id: str, command: str, event_type: str = "comma
         user_data = await get_user_data(str(user_id))
         if not user_data:
             return
-            
+        if "stats_data" in cache:
+        stats_data = pickle.loads(cache["stats_data"])
+        stats_data.append(new_record)
+        cache["stats_data"] = pickle.dumps(stats_data[-1000:])
         stats_sheet = main_spreadsheet.worksheet(STATSS_SHEET_NAME)
         stats_sheet.append_row([
             datetime.now().strftime("%d.%m.%Y"),
