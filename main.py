@@ -170,6 +170,20 @@ def service_mode_keyboard() -> types.ReplyKeyboardMarkup:
 def cancel_keyboard() -> types.ReplyKeyboardMarkup:
     return create_keyboard(["❌ Отмена"], (1,))
 
+
+def broadcast_target_keyboard():
+    return create_keyboard(
+        ["Всем пользователям", "По магазинам", "По отделам", "Вручную", "❌ Отмена"],
+        (2, 2, 1)
+    )
+
+def broadcast_confirmation_keyboard():
+    return create_keyboard(
+        ["✅ Подтвердить рассылку", "❌ Отмена"],
+        (2,)
+    )
+
+
 # ===================== СЕРВИСНЫЕ ФУНКЦИИ =====================
 async def notify_admins(message: str) -> None:
     """Уведомление администраторов"""
@@ -902,25 +916,18 @@ async def handle_admin_stats(message: types.Message):
         return
     
     try:
-        # Основная статистика
-        users_data = []
-        if "users_data" in cache:
-            try:
-                users_data = pickle.loads(cache["users_data"])
-            except pickle.UnpicklingError:
-                users_data = []  # Защита от битых данных
-                
-        users_count = len(users_data)
-
-        stats_data = []
-        if "stats_data" in cache:
-            try:
-                stats_data = pickle.loads(cache["stats_data"])
-            except pickle.UnpicklingError:
-                stats_data = []  # Защита от битых данных
-                
-        orders_count = sum(1 for r in stats_data if len(r) > 8 and r[8] == 'order')
+        # Получаем данные о пользователях из кэша
+        users_data = pickle.loads(cache.get("users_data", b"[]"))
+        users_count = len(users_data) if users_data else 0
         
+        # ПРЯМОЕ ОБРАЩЕНИЕ К GOOGLE SHEETS ДЛЯ СТАТИСТИКИ
+        stats_sheet = main_spreadsheet.worksheet(STATSS_SHEET_NAME)
+        stats_records = stats_sheet.get_all_records()
+        
+        # Считаем количество заказов
+        orders_count = sum(1 for r in stats_records if r.get('Тип события') == 'order')
+        
+        # Получаем системные метрики
         cpu_usage = psutil.cpu_percent()
         memory_usage = psutil.virtual_memory().percent
         
@@ -928,7 +935,7 @@ async def handle_admin_stats(message: types.Message):
             f"📊 Статистика бота:\n\n"
             f"• Пользователей: {users_count}\n"
             f"• Заказов оформлено: {orders_count}\n"
-            f"• Логов действий: {len(stats_data)}\n\n"
+            f"• Логов действий: {len(stats_records)}\n\n"
             f"⚙️ Состояние сервера:\n"
             f"• Загрузка CPU: {cpu_usage}%\n"
             f"• Использование RAM: {memory_usage}%\n"
@@ -937,139 +944,190 @@ async def handle_admin_stats(message: types.Message):
         await message.answer(response, reply_markup=admin_panel_keyboard())
         
     except Exception as e:
-        await message.answer(f"❌ Ошибка: {str(e)}", reply_markup=admin_panel_keyboard())
-
+        logging.error(f"Ошибка при получении статистики: {str(e)}")
+        await message.answer(f"❌ Ошибка при получении статистики: {str(e)}", 
+                            reply_markup=admin_panel_keyboard())
 
 
 
 ##===============РАССЫЛКА=================
+
 @dp.message(F.text == "📢 Рассылка")
 async def handle_broadcast_menu(message: types.Message, state: FSMContext):
-    """Начало рассылки"""
+    """Начало процесса рассылки"""
     if message.from_user.id not in ADMINS:
         return
     
-    await message.answer("✉️ Введите сообщение для рассылки:", 
-                        reply_markup=cancel_keyboard())
+    await message.answer(
+        "✉️ Введите сообщение для рассылки (можно с медиа-вложениями):",
+        reply_markup=types.ReplyKeyboardRemove()
+    )
     await state.set_state(AdminBroadcast.message_input)
 
 @dp.message(AdminBroadcast.message_input)
 async def process_broadcast_message(message: types.Message, state: FSMContext):
     """Обработка сообщения для рассылки"""
-    await state.update_data(message=message.html_text)
-    await message.answer("✅ Сообщение сохранено\nВыберите целевую аудиторию:", 
-                        reply_markup=create_keyboard(
-                            ["Всем пользователям", "По магазинам", "По отделам", "Вручную", "❌ Отмена"],
-                            (2, 2, 1)
-                        ))
+    # Сохраняем контент в зависимости от типа
+    content = {
+        'text': message.html_text,
+        'media': None,
+        'type': 'text'
+    }
+    
+    if message.photo:
+        content.update({
+            'type': 'photo',
+            'media': message.photo[-1].file_id,
+            'caption': message.caption
+        })
+    elif message.document:
+        content.update({
+            'type': 'document',
+            'media': message.document.file_id,
+            'caption': message.caption
+        })
+    
+    await state.update_data(content=content)
+    
+    # Предпросмотр сообщения
+    preview_text = "✉️ Предпросмотр сообщения:\n"
+    if content['type'] == 'text':
+        preview_text += content['text']
+    else:
+        preview_text += f"[{content['type'].upper()}] {content.get('caption', '')}"
+    
+    await message.answer(
+        preview_text,
+        reply_markup=broadcast_target_keyboard()
+    )
     await state.set_state(AdminBroadcast.target_selection)
 
-@dp.message(AdminBroadcast.target_selection, F.text == "Всем пользователям")
-async def handle_broadcast_all(message: types.Message, state: FSMContext):
-    """Рассылка всем пользователям"""
-    data = await state.get_data()
-    users = [str(user['ID пользователя']) for user in pickle.loads(cache.get("users_data", b"[]"))]
-    await send_broadcast(data['message'], users)
-    await message.answer(f"✅ Рассылка запущена для {len(users)} пользователей", 
-                        reply_markup=admin_panel_keyboard())
-    await state.clear()
+@dp.message(AdminBroadcast.target_selection)
+async def handle_target_selection(message: types.Message, state: FSMContext):
+    """Обработка выбора целевой аудитории"""
+    if message.text == "Всем пользователям":
+        await state.update_data(target="all")
+        await message.answer("✅ Отправить всем пользователям", 
+                            reply_markup=broadcast_confirmation_keyboard())
+        await state.set_state(AdminBroadcast.confirmation)
+    elif message.text == "Вручную":
+        await message.answer("🔢 Введите ID пользователей через запятую:")
+        await state.set_state(AdminBroadcast.manual_ids)
+    elif message.text == "❌ Отмена":
+        await state.clear()
+        await message.answer("❌ Рассылка отменена", reply_markup=admin_panel_keyboard())
+    else:
+        await message.answer("❌ Неверный выбор. Пожалуйста, используйте кнопки.", 
+                            reply_markup=broadcast_target_keyboard())
+
+@dp.message(AdminBroadcast.manual_ids)
+async def process_manual_ids(message: types.Message, state: FSMContext):
+    """Обработка ручного ввода ID"""
+    user_ids = [id.strip() for id in message.text.split(",") if id.strip().isdigit()]
+    
+    if not user_ids:
+        await message.answer("❌ Неверный формат ID. Повторите ввод:")
+        return
+    
+    await state.update_data(target="manual", user_ids=user_ids)
+    await message.answer(f"✅ ID пользователей введены ({len(user_ids)} шт.)", 
+                        reply_markup=broadcast_confirmation_keyboard())
+    await state.set_state(AdminBroadcast.confirmation)
 
 @dp.message(AdminBroadcast.confirmation, F.text == "✅ Подтвердить рассылку")
 async def confirm_broadcast(message: types.Message, state: FSMContext):
-    """Подтверждение рассылки с улучшенной обработкой"""
+    """Подтверждение и запуск рассылки"""
+    data = await state.get_data()
+    content = data['content']
+    target = data.get('target', 'all')
+    user_ids = data.get('user_ids', [])
+    
+    # Получаем список всех пользователей для рассылки
+    if target == "all":
+        users_data = pickle.loads(cache.get("users_data", b"[]"))
+        user_ids = [str(user['ID пользователя']) for user in users_data if user.get('ID пользователя')]
+    elif target == "manual":
+        # Уже есть user_ids
+        pass
+    
+    if not user_ids:
+        await message.answer("❌ Нет пользователей для рассылки")
+        await state.clear()
+        return
+    
+    # Записываем в логи
     try:
-        await state.update_data(last_activity=datetime.now().isoformat())
-        data = await state.get_data()
-        
-        # Проверяем наличие необходимых данных
-        if 'content' not in data or 'target' not in data:
-            await message.answer("❌ Ошибка: данные рассылки повреждены")
-            await state.clear()
-            return
-            
-        content = data['content']
-        target = data.get('target', 'all')
-        user_ids = data.get('user_ids', [])
-        
-        # Логирование
         logs_sheet.append_row([
             datetime.now().strftime("%d.%m.%Y %H:%M"),
             message.from_user.id,
             "BROADCAST",
-            f"Type: {content.get('type', 'text')}, Target: {target}"
+            f"Type: {content['type']}, Users: {len(user_ids)}"
         ])
-        
-        await message.answer("🔄 Начинаю рассылку...", reply_markup=admin_panel_keyboard())
-        
-        # Асинхронная рассылка без блокировки
-        asyncio.create_task(execute_broadcast(content, target, user_ids))
-        
-        await state.clear()
-        
     except Exception as e:
-        logging.error(f"Ошибка подтверждения рассылки: {str(e)}")
-        await message.answer("❌ Произошла ошибка при запуске рассылки", 
-                            reply_markup=admin_panel_keyboard())
-        await state.clear()
+        logging.error(f"Ошибка логирования рассылки: {str(e)}")
+    
+    await message.answer(f"🔄 Начинаю рассылку для {len(user_ids)} пользователей...", 
+                        reply_markup=admin_panel_keyboard())
+    
+    # Запускаем асинхронную рассылку
+    asyncio.create_task(send_broadcast(content, user_ids))
+    
+    await state.clear()
 
-async def execute_broadcast(content: dict, target: str, user_ids: list):
-    """Выполнение рассылки с улучшенной обработкой"""
-    try:
-        # Получаем список пользователей в зависимости от цели
-        if target == "manual":
-            recipients = user_ids
-        else:
-            users_data = pickle.loads(cache.get("users_data", b"[]"))
-            recipients = [str(user.get("ID пользователя", "")) for user in users_data]
-        
-        success = 0
-        errors = 0
-        
-        for user_id in recipients:
-            try:
-                if not user_id.strip():
-                    continue
-                    
-                # Отправляем в зависимости от типа контента
-                if content['type'] == 'text':
-                    await bot.send_message(int(user_id), content['text'])
-                elif content['type'] == 'photo':
-                    await bot.send_photo(
-                        int(user_id), 
-                        content['media'],
-                        caption=content.get('caption', '')
-                    )
-                elif content['type'] == 'document':
-                    await bot.send_document(
-                        int(user_id), 
-                        content['media'],
-                        caption=content.get('caption', '')
-                    )
-                
-                success += 1
-                await asyncio.sleep(0.1)  # Защита от ограничений
-                
-            except Exception as e:
-                errors += 1
-                logging.error(f"Ошибка рассылки для {user_id}: {str(e)}")
-                
-        # Уведомление администратору
-        await bot.send_message(
-            ADMINS[0],
-            f"📊 Результаты рассылки:\n✅ Успешно: {success}\n❌ Ошибок: {errors}"
-        )
-        
-    except Exception as e:
-        logging.critical(f"Критическая ошибка рассылки: {str(e)}")
-        # Попытка уведомить администратора об ошибке
+async def send_broadcast(content: dict, user_ids: list):
+    """Асинхронная отправка рассылки"""
+    success = 0
+    failed = 0
+    errors = []
+    
+    for user_id in user_ids:
         try:
-            await bot.send_message(
-                ADMINS[0],
-                f"🚨 Рассылка завершилась с ошибкой: {str(e)}"
-            )
-        except:
-            pass
+            if not user_id.strip():
+                continue
+                
+            if content['type'] == 'text':
+                await bot.send_message(int(user_id), content['text'])
+            elif content['type'] == 'photo':
+                await bot.send_photo(
+                    int(user_id),
+                    photo=content['media'],
+                    caption=content.get('caption', '')
+                )
+            elif content['type'] == 'document':
+                await bot.send_document(
+                    int(user_id),
+                    document=content['media'],
+                    caption=content.get('caption', '')
+                )
+            
+            success += 1
+            await asyncio.sleep(0.1)  # Защита от ограничений
+        except TelegramForbiddenError:
+            failed += 1  # Пользователь заблокировал бота
+        except Exception as e:
+            failed += 1
+            errors.append(str(e))
+            logging.error(f"Ошибка рассылки для {user_id}: {str(e)}")
+    
+    # Отправляем отчет администратору
+    report = (
+        f"📊 Результаты рассылки:\n"
+        f"• Всего получателей: {len(user_ids)}\n"
+        f"• Успешно: {success}\n"
+        f"• Не удалось: {failed}"
+    )
+    
+    if errors:
+        unique_errors = set(errors)
+        report += f"\n\nОсновные ошибки:\n" + "\n".join([f"- {e}" for e in list(unique_errors)[:3]])
+    
+    try:
+        await bot.send_message(ADMINS[0], report)
+    except Exception as e:
+        logging.error(f"Не удалось отправить отчет: {str(e)}")
 
+
+##===============ОБРАБОТЧИКИ=================
 
 @dp.message(F.text == "🔄 Обновить кэш")
 async def handle_cache_refresh(message: types.Message):
