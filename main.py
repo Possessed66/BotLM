@@ -350,7 +350,7 @@ async def disable_service_mode(message: types.Message):
 async def handle_back_to_main(message: types.Message):
     await message.answer(
         "🔙 Возврат в главное меню",
-        reply_markup=main_menu_keyboard(message.from_user.id)
+        reply_markup=main_menu_keyboard(message.from_user.id))
 
 
 
