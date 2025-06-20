@@ -243,27 +243,33 @@ async def toggle_service_mode(enable: bool):
 
 # ===================== ОБРАБОТЧИКИ АДМИН-ПАНЕЛИ =====================
 
+# ===================== ОБРАБОТЧИКИ АДМИН-ПАНЕЛИ =====================
 @dp.message(F.text == "🛠 Админ-панель")
 async def handle_admin_panel(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMINS:
+        await message.answer("⛔ У вас нет прав доступа к админ-панели")
         return
     
-    await message.answer(
-        "🛠 Панель администратора:",
-        reply_markup=admin_panel_keyboard()
-    )
-    await state.set_state(AdminStates.panel)
+    try:
+        await message.answer(
+            "🛠 Панель администратора:",
+            reply_markup=admin_panel_keyboard()
+        )
+        await state.set_state(AdminStates.panel)
+    except Exception as e:
+        logging.error(f"Ошибка открытия админ-панели: {str(e)}")
+        await message.answer("⚠️ Ошибка открытия админ-панели")
 
 @dp.message(AdminStates.panel, F.text == "📊 Статистика")
 async def handle_admin_stats(message: types.Message):
     try:
         # Статистика пользователей
-        users_count = len(pickle.loads(cache.get("users_data", b"")))
+        users_data = pickle.loads(cache.get("users_data", b"[]"))
+        users_count = len(users_data) if users_data else 0
         
         # Статистика использования
-        stats_sheet = main_spreadsheet.worksheet(STATSS_SHEET_NAME)
-        stats_data = stats_sheet.get_all_records()
-        orders_count = sum(1 for r in stats_data if r['Тип события'] == 'order')
+        stats_data = pickle.loads(cache.get("stats_data", b"[]"))
+        orders_count = sum(1 for r in stats_data if len(r) > 8 and r[8] == 'order')
         
         # Статистика сервера
         import psutil
@@ -283,6 +289,7 @@ async def handle_admin_stats(message: types.Message):
         await message.answer(response, reply_markup=back_to_admin_keyboard())
         
     except Exception as e:
+        logging.error(f"Ошибка получения статистики: {str(e)}")
         await message.answer(f"❌ Ошибка: {str(e)}", reply_markup=admin_panel_keyboard())
 
 @dp.message(AdminStates.panel, F.text == "📢 Рассылка")
@@ -296,9 +303,8 @@ async def handle_broadcast_start(message: types.Message, state: FSMContext):
 @dp.message(AdminStates.broadcast_message)
 async def handle_broadcast_message(message: types.Message, state: FSMContext):
     if message.text == "❌ Отмена":
-        await state.clear()
-        await message.answer("❌ Рассылка отменена", reply_markup=admin_panel_keyboard())
         await state.set_state(AdminStates.panel)
+        await message.answer("❌ Рассылка отменена", reply_markup=admin_panel_keyboard())
         return
         
     await state.update_data(broadcast_message=message.html_text)
@@ -310,23 +316,61 @@ async def handle_broadcast_message(message: types.Message, state: FSMContext):
 
 @dp.message(AdminStates.broadcast_target)
 async def handle_broadcast_target(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    
     if message.text == "❌ Отмена":
-        await state.clear()
-        await message.answer("❌ Рассылка отменена", reply_markup=admin_panel_keyboard())
         await state.set_state(AdminStates.panel)
+        await message.answer("❌ Рассылка отменена", reply_markup=admin_panel_keyboard())
         return
         
+    data = await state.get_data()
+    message_text = data['broadcast_message']
+    
     # Рассылка всем пользователям
     if message.text == "Всем пользователям":
-        users = users_sheet.col_values(1)[1:]
-        await send_broadcast(data['broadcast_message'], users)
-        await message.answer(f"✅ Рассылка отправлена {len(users)} пользователям", reply_markup=admin_panel_keyboard())
+        users_data = pickle.loads(cache.get("users_data", b"[]"))
+        user_ids = [str(user.get("ID пользователя", "")) for user in users_data if user.get("ID пользователя")]
+        success, failed = await send_broadcast(message_text, user_ids)
+        await message.answer(
+            f"✅ Рассылка завершена:\nУспешно: {success}\nНе удалось: {failed}",
+            reply_markup=admin_panel_keyboard()
+        )
         await state.set_state(AdminStates.panel)
     
-    # Другие типы рассылки (реализация аналогична)
-    # ...
+    # Рассылка по магазинам (пример)
+    elif message.text == "По магазинам":
+        await message.answer(
+            "🏪 Введите номера магазинов через запятую:",
+            reply_markup=cancel_keyboard()
+        )
+        await state.set_state(AdminStates.manual_ids_input)
+    
+    # Другие типы рассылки
+    else:
+        await message.answer(
+            "⏳ Эта функция в разработке",
+            reply_markup=admin_panel_keyboard()
+        )
+        await state.set_state(AdminStates.panel)
+
+@dp.message(AdminStates.manual_ids_input)
+async def handle_manual_ids_input(message: types.Message, state: FSMContext):
+    if message.text == "❌ Отмена":
+        await state.set_state(AdminStates.panel)
+        await message.answer("❌ Рассылка отменена", reply_markup=admin_panel_keyboard())
+        return
+        
+    # Здесь можно реализовать логику фильтрации пользователей
+    # Пока просто отправляем сообщение
+    await message.answer(
+        "✅ Параметры рассылки получены. Начинаю рассылку...",
+        reply_markup=admin_panel_keyboard()
+    )
+    
+    # Фиктивная рассылка для примера
+    await message.answer(
+        "⏳ Рассылка завершена (режим демонстрации)",
+        reply_markup=admin_panel_keyboard()
+    )
+    await state.set_state(AdminStates.panel)
 
 @dp.message(AdminStates.panel, F.text == "🔄 Обновить кэш")
 async def handle_cache_refresh(message: types.Message):
@@ -337,16 +381,22 @@ async def handle_cache_refresh(message: types.Message):
         await message.answer(f"❌ Ошибка обновления кэша: {str(e)}", reply_markup=admin_panel_keyboard())
 
 @dp.message(AdminStates.panel, F.text == "📝 Просмотр логов")
-async def handle_logs_view(message: types.Message, state: FSMContext):
+async def handle_logs_view(message: types.Message):
     try:
         # Получаем последние 20 записей логов
-        logs = logs_sheet.get_all_values()
-        if len(logs) > 20:
-            logs = logs[-20:]
+        stats_data = pickle.loads(cache.get("stats_data", b"[]"))
+        if len(stats_data) > 20:
+            logs = stats_data[-20:]
+        else:
+            logs = stats_data
         
         log_text = "📝 Последние действия в системе:\n\n"
         for log in logs:
-            log_text += f"{log[0]} | {log[1]} | {log[2]}\n"
+            # Проверяем, что лог содержит достаточно элементов
+            if len(log) >= 9:
+                log_text += f"{log[0]} {log[1]} - {log[2]}: {log[7]} ({log[8]})\n"
+            else:
+                log_text += f"Неполная запись: {log}\n"
         
         await message.answer(log_text[:4000], reply_markup=admin_panel_keyboard())
     except Exception as e:
@@ -362,7 +412,7 @@ async def handle_service_mode(message: types.Message, state: FSMContext):
     await state.set_state(AdminStates.service_mode_manage)
 
 @dp.message(AdminStates.service_mode_manage, F.text == "🟢 Включить сервисный режим")
-async def enable_service_mode(message: types.Message, state: FSMContext):
+async def enable_service_mode(message: types.Message):
     global SERVICE_MODE
     SERVICE_MODE = True
     await broadcast("🔧 Бот переходит в сервисный режим. Некоторые функции временно недоступны.")
@@ -370,7 +420,7 @@ async def enable_service_mode(message: types.Message, state: FSMContext):
     await state.set_state(AdminStates.panel)
 
 @dp.message(AdminStates.service_mode_manage, F.text == "🔴 Выключить сервисный режим")
-async def disable_service_mode(message: types.Message, state: FSMContext):
+async def disable_service_mode(message: types.Message):
     global SERVICE_MODE
     SERVICE_MODE = False
     await broadcast("✅ Сервисный режим отключен. Все функции доступны.")
@@ -378,10 +428,9 @@ async def disable_service_mode(message: types.Message, state: FSMContext):
     await state.set_state(AdminStates.panel)
 
 @dp.message(AdminStates.service_mode_manage, F.text == "🔙 Назад")
-async def back_from_service_mode(message: types.Message, state: FSMContext):
+async def back_from_service_mode(message: types.Message):
     await message.answer("🔙 Возврат в админ-панель", reply_markup=admin_panel_keyboard())
     await state.set_state(AdminStates.panel)
-
 
 
 
@@ -676,17 +725,19 @@ async def process_barcode_image(photo: types.PhotoSize) -> (str, str):
         
         # Скачиваем фото
         file = await bot.get_file(photo.file_id)
-        image_data = await bot.download_file(file.file_path)
+        image_bytes = await bot.download(file.file_path)
+        
+        logging.info(f"Processing image: {len(image_bytes)} bytes")
         
         # Проверка размера
-        if len(image_data) > MAX_IMAGE_SIZE:
+        if len(image_bytes) > MAX_IMAGE_SIZE:
             return None, f"Изображение слишком большое (> {MAX_IMAGE_SIZE//1024}KB)"
         
         # Обработка в отдельном потоке
         loop = asyncio.get_running_loop()
         
         # Используем контекстный менеджер для работы с памятью
-        with io.BytesIO(image_data) as buffer:
+        with io.BytesIO(image_bytes) as buffer:
             image = await loop.run_in_executor(
                 image_processor, 
                 Image.open, 
@@ -697,11 +748,14 @@ async def process_barcode_image(photo: types.PhotoSize) -> (str, str):
             image = image.convert('L')  # Градации серого
             image.thumbnail((800, 800))
             
-            decoded_objects = await loop.run_in_executor(
-                image_processor, 
-                decode, 
-                image
-            )
+            # Обработка с таймаутом
+            try:
+                decoded_objects = await asyncio.wait_for(
+                    loop.run_in_executor(image_processor, decode, image),
+                    timeout=10.0
+                )
+            except asyncio.TimeoutError:
+                return None, "Превышено время обработки изображения"
             
             # Явно освобождаем ресурсы
             del image
@@ -724,8 +778,8 @@ async def process_barcode_image(photo: types.PhotoSize) -> (str, str):
         logging.exception(f"Barcode processing error: {str(e)}")
         return None, "Ошибка обработки изображения"
     finally:
+        # Принудительный сбор мусора после обработки изображения
         gc.collect()
-
 
 @dp.message(Command("test_barcode"))
 async def test_barcode(message: types.Message):
@@ -1512,18 +1566,30 @@ async def confirm_broadcast(message: types.Message, state: FSMContext):
     asyncio.create_task(send_broadcast(content, target, user_ids))
     await state.clear()
 
-async def send_broadcast(message_text: str, user_ids: list):
-    """Улучшенная функция рассылки"""
+async def send_broadcast(message_text: str, user_ids: list) -> tuple:
+    """Улучшенная функция рассылки с обработкой ошибок"""
     success = 0
     failed = 0
+    failed_ids = []
+    
     for user_id in user_ids:
         try:
+            # Пропускаем пустые ID
+            if not user_id or not user_id.strip():
+                continue
+                
             await bot.send_message(int(user_id), message_text)
             success += 1
-            await asyncio.sleep(0.05)  # Ограничение частоты отправки
+            await asyncio.sleep(0.1)  # Ограничение частоты отправки
         except Exception as e:
             failed += 1
+            failed_ids.append(user_id)
             logging.error(f"Ошибка рассылки: {user_id} - {str(e)}")
+    
+    # Логирование результатов
+    logging.info(f"Рассылка завершена: успешно={success}, неудачно={failed}")
+    if failed_ids:
+        logging.info(f"Не удалось отправить: {', '.join(failed_ids)}")
     
     return success, failed
     await bot.send_message(
@@ -1548,12 +1614,9 @@ async def log_user_activity(user_id: str, command: str, event_type: str = "comma
         user_data = await get_user_data(str(user_id))
         if not user_data:
             return
-        if "stats_data" in cache:
-            stats_data = pickle.loads(cache["stats_data"])
-            stats_data.append(new_record)
-            cache["stats_data"] = pickle.dumps(stats_data[-1000:])
-        stats_sheet = main_spreadsheet.worksheet(STATSS_SHEET_NAME)
-        stats_sheet.append_row([
+            
+        # Формируем запись для логирования
+        new_record = [
             datetime.now().strftime("%d.%m.%Y"),
             datetime.now().strftime("%H:%M:%S"),
             str(user_id),
@@ -1563,11 +1626,19 @@ async def log_user_activity(user_id: str, command: str, event_type: str = "comma
             user_data.get('shop', ''),
             command,
             event_type
-        ])
+        ]
+        
+        stats_sheet = main_spreadsheet.worksheet(STATSS_SHEET_NAME)
+        stats_sheet.append_row(new_record)
+        
+        # Обновляем кэш статистики
+        if "stats_data" in cache:
+            stats_data = pickle.loads(cache["stats_data"])
+            stats_data.append(new_record)
+            cache["stats_data"] = pickle.dumps(stats_data[-1000:])  # Храним последние 1000 записей
+        
     except Exception as e:
         logging.error(f"Ошибка логирования статистики: {str(e)}")
-
-
 
 # ===================== ОБЩАЯ ЛОГИКА ЗАПУСКА =====================
 async def scheduled_cache_update():
