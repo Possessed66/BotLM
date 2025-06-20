@@ -6,7 +6,9 @@ import re
 import gc
 import asyncio
 import logging
+import traceback
 from pyzbar.pyzbar import decode
+from aiogram.exceptions import TelegramBadRequest
 from PIL import Image
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List, Optional, Tuple
@@ -284,15 +286,23 @@ def calculate_delivery_date(supplier_data: dict) -> Tuple[str, str]:
     )
 
 async def process_barcode_image(photo: types.PhotoSize) -> Tuple[Optional[str], Optional[str]]:
-    """Обработка изображения со штрих-кодом"""
+    """Обработка изображения со штрих-кодом с улучшенной загрузкой файлов"""
     try:
         # Проверка кэша штрих-кодов
         if "barcodes_index" not in cache or not cache["barcodes_index"]:
             return None, "Система штрих-кодов не настроена"
         
-        # Скачиваем фото
-        file = await bot.get_file(photo.file_id)
-        image_bytes = await bot.download(file.file_path)
+        # Скачиваем фото с повторными попытками
+        for attempt in range(3):
+            try:
+                file = await bot.get_file(photo.file_id)
+                image_bytes = await bot.download(file.file_path)
+                break
+            except TelegramBadRequest as e:
+                if "temporarily unavailable" in str(e) and attempt < 2:
+                    await asyncio.sleep(1)  # Пауза перед повторной попыткой
+                    continue
+                raise
         
         # Проверка размера
         if len(image_bytes) > MAX_IMAGE_SIZE:
@@ -304,7 +314,11 @@ async def process_barcode_image(photo: types.PhotoSize) -> Tuple[Optional[str], 
         
         try:
             with io.BytesIO(image_bytes) as buffer:
-                image = await loop.run_in_executor(image_processor, Image.open, buffer)
+                image = await loop.run_in_executor(
+                    image_processor, 
+                    Image.open, 
+                    buffer
+                )
                 image = image.convert('L')
                 image.thumbnail((800, 800))
                 
@@ -327,8 +341,13 @@ async def process_barcode_image(photo: types.PhotoSize) -> Tuple[Optional[str], 
         
         return article, None if article else f"Штрих-код {barcode_data} не найден"
         
+    except TelegramBadRequest as e:
+        logging.error(f"Ошибка Telegram при загрузке файла: {str(e)}")
+        return None, "Файл временно недоступен, попробуйте позже"
+    except asyncio.TimeoutError:
+        return None, "Превышено время обработки изображения"
     except Exception as e:
-        logging.exception(f"Ошибка обработки штрих-кода: {str(e)}")
+        logging.exception(f"Общая ошибка обработки штрих-кода: {str(e)}")
         return None, "Ошибка обработки изображения"
 
 async def get_product_info(article: str, shop: str) -> Optional[Dict[str, Any]]:
@@ -461,20 +480,24 @@ async def activity_tracker_middleware(handler, event, data):
             state_data = await state.get_data()
             last_activity = state_data.get('last_activity', datetime.min)
             
+            # Обработка строкового формата
             if isinstance(last_activity, str):
                 try:
                     last_activity = datetime.fromisoformat(last_activity)
-                except ValueError:
+                except (ValueError, TypeError):
                     last_activity = datetime.min
             
-            if datetime.now() - last_activity > timedelta(minutes=20):
-                await state.clear()
-                if event.message:
-                    await event.message.answer("🕒 Сессия истекла. Начните заново.")
-                elif event.callback_query:
-                    await event.callback_query.message.answer("🕒 Сессия истекла. Начните заново.")
-                return
+            # Проверка только если это datetime
+            if isinstance(last_activity, datetime):
+                if datetime.now() - last_activity > timedelta(minutes=20):
+                    await state.clear()
+                    if event.message:
+                        await event.message.answer("🕒 Сессия истекла. Начните заново.")
+                    elif event.callback_query:
+                        await event.callback_query.message.answer("🕒 Сессия истекла. Начните заново.")
+                    return
 
+            # Всегда обновляем время активности
             await state.update_data(last_activity=datetime.now().isoformat())
     
     return await handler(event, data)
@@ -553,7 +576,10 @@ async def handle_back(message: types.Message, state: FSMContext):
 @dp.message(F.text.casefold() == "отмена")
 @dp.message(F.text == "❌ Отмена")
 async def cancel_handler(message: types.Message, state: FSMContext):
-    """Универсальный обработчик отмены"""
+    """Универсальный обработчик отмены с обновлением активности"""
+    # Обновляем активность перед обработкой
+    await state.update_data(last_activity=datetime.now().isoformat())
+    
     current_state = await state.get_state()
     if current_state:
         await state.clear()
@@ -867,10 +893,22 @@ async def handle_admin_stats(message: types.Message):
     
     try:
         # Основная статистика
-        users_data = pickle.loads(cache.get("users_data", b"[]"))
-        users_count = len(users_data) if users_data else 0
-        
-        stats_data = pickle.loads(cache.get("stats_data", b"[]"))
+        users_data = []
+        if "users_data" in cache:
+            try:
+                users_data = pickle.loads(cache["users_data"])
+            except pickle.UnpicklingError:
+                users_data = []  # Защита от битых данных
+                
+        users_count = len(users_data)
+
+        stats_data = []
+        if "stats_data" in cache:
+            try:
+                stats_data = pickle.loads(cache["stats_data"])
+            except pickle.UnpicklingError:
+                stats_data = []  # Защита от битых данных
+                
         orders_count = sum(1 for r in stats_data if len(r) > 8 and r[8] == 'order')
         
         cpu_usage = psutil.cpu_percent()
@@ -1025,9 +1063,22 @@ async def shutdown():
 
 async def main():
     """Главная функция запуска"""
-    await startup()
-    logging.info("✅ Бот запущен в режиме поллинга")
-    await dp.start_polling(bot, skip_updates=True)
+    try:
+        await startup()
+        logging.info("✅ Бот запущен в режиме поллинга")
+        await dp.start_polling(bot, skip_updates=True)
+    except Exception as e:
+        logging.critical(f"🚨 Критическая ошибка: {str(e)}\n{traceback.format_exc()}")
+        # Попытка уведомить администраторов
+        for admin_id in ADMINS:
+            try:
+                await bot.send_message(
+                    admin_id,
+                    f"🚨 Бот упал с ошибкой:\n{str(e)}\n\n{traceback.format_exc()[:3000]}"
+                )
+            except:
+                pass
+        raise
 
 if __name__ == "__main__":
     try:
