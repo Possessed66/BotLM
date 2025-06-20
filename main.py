@@ -697,7 +697,9 @@ async def continue_order_process(message: types.Message, state: FSMContext):
     await state.update_data(
         product_name=product_info['Название'],
         department=product_info['Отдел'],
-        supplier_name=product_info['Поставщик']
+        supplier_name=product_info['Поставщик'],
+        order_date=product_info['Дата заказа'],  
+        delivery_date=product_info['Дата поставки']  
     )
     
     await message.answer(response)
