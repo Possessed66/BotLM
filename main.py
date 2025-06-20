@@ -484,38 +484,43 @@ async def service_mode_middleware(handler, event, data):
             return
     return await handler(event, data)
 
-@dp.update.middleware()
+@@dp.update.middleware()
 async def activity_tracker_middleware(handler, event, data):
-    """Отслеживание активности пользователя с исключениями"""
+    """Улучшенный трекинг активности пользователя"""
     state = data.get('state')
     if state:
         current_state = await state.get_state()
         if current_state:
-            state_name = current_state.split(':')[-1]
-            
-            # Исключение для состояний рассылки - не применяем таймаут
-            if state_name.startswith("AdminBroadcast"):
-                return await handler(event, data)
-                
+            # Получаем данные состояния
             state_data = await state.get_data()
-            last_activity = state_data.get('last_activity', datetime.min)
             
+            # Инициализируем last_activity, если отсутствует
+            last_activity = state_data.get('last_activity')
+            if not last_activity:
+                await state.update_data(last_activity=datetime.now().isoformat())
+                return await handler(event, data)
+            
+            # Преобразуем строку в datetime при необходимости
             if isinstance(last_activity, str):
                 try:
                     last_activity = datetime.fromisoformat(last_activity)
-                except (ValueError, TypeError):
+                except ValueError:
                     last_activity = datetime.min
             
-            if isinstance(last_activity, datetime):
-                if datetime.now() - last_activity > timedelta(minutes=20):
-                    await state.clear()
-                    if event.message:
-                        await event.message.answer("🕒 Сессия истекла. Начните заново.")
-                    elif event.callback_query:
-                        await event.callback_query.message.answer("🕒 Сессия истекла. Начните заново.")
-                    return
-
+            # Проверяем таймаут
+            if datetime.now() - last_activity > timedelta(minutes=20):
+                await state.clear()
+                if event.message:
+                    await event.message.answer("🕒 Сессия истекла. Начните заново.")
+                elif event.callback_query:
+                    await event.callback_query.message.answer("🕒 Сессия истекла. Начните заново.")
+                return
+            
+            # Обновляем время активности ПОСЛЕ обработки сообщения
+            # Это ключевое изменение!
+            response = await handler(event, data)
             await state.update_data(last_activity=datetime.now().isoformat())
+            return response
     
     return await handler(event, data)
 
