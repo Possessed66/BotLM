@@ -926,7 +926,7 @@ async def cancel_scan(message: types.Message, state: FSMContext):
     await state.set_state(OrderStates.article_input)
 
 
-@dp.message(OrderStates.article_input, F.text == "🔍 Сканировать штрих-код")
+@dp.message(OrderStates.article_input, F.text == "🔍 Сканировать штрих-код(пока не работает)")
 async def handle_scan_choice(message: types.Message, state: FSMContext):
     await message.answer(
         "📸 Отправьте фото штрих-кода товара\n\n"
