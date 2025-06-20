@@ -761,7 +761,7 @@ async def final_confirmation(message: types.Message, state: FSMContext):
         
         # Формируем обновления
         updates = [
-            {'range': f'A{next_row}', 'values': [[data['selected_shop']]},
+            {'range': f'A{next_row}', 'values': [[data['selected_shop']]]},
             {'range': f'B{next_row}', 'values': [[int(data['article'])]]},
             {'range': f'C{next_row}', 'values': [[data['order_reason']]]},
             {'range': f'D{next_row}', 'values': [[datetime.now().strftime("%d.%m.%Y %H:%M")]]},
