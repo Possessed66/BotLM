@@ -100,6 +100,7 @@ class Registration(StatesGroup):
 
 class OrderStates(StatesGroup):
     article_input = State()
+    barcode_scan = State()
     shop_selection = State()
     shop_input = State()
     quantity_input = State()
