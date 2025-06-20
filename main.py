@@ -1036,7 +1036,7 @@ async def process_custom_shop(message: types.Message, state: FSMContext):
         await message.answer("❗ Номер магазина должен быть целым числом без ведущих нулей. Повторите ввод:")
         return
     await state.update_data(selected_shop=shop)
-    await message.answer("✅ Магазин выбран", reply_markup=ReplyKeyboardRemove())
+    await message.answer("✅ Магазин выбран\n 🔄 Загружаю", reply_markup=ReplyKeyboardRemove())
     await process_article_continuation(message, state)
 
 @dp.message(OrderStates.shop_selection)
