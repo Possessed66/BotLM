@@ -934,7 +934,7 @@ async def handle_scan_choice(message: types.Message, state: FSMContext):
         "- Убедитесь, что штрих-код хорошо освещен\n"
         "- Держите камеру прямо напротив штрих-кода\n"
         "- Избегайте бликов и теней",
-        reply_markup=cancel_only_keyboard()
+        reply_markup=cancel_keyboard()
     )
     await state.set_state(OrderStates.barcode_scan)
 
