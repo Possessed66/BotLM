@@ -194,10 +194,10 @@ def admin_panel_keyboard():
     return create_keyboard(
         [
             "📊 Статистика", "📢 Рассылка", 
-            "🔄 Обновить кэш", "📝 Просмотр логов",
-            "🔧 Сервисный режим", "🔙 Главное меню"
+            "🔄 Обновить кэш", "🔧 Сервисный режим",
+            "🔙 Главное меню"
         ],
-        (2, 2, 2)
+        (2, 2, 1)
     )
 
 def broadcast_target_keyboard():
@@ -243,35 +243,31 @@ async def toggle_service_mode(enable: bool):
 
 # ===================== ОБРАБОТЧИКИ АДМИН-ПАНЕЛИ =====================
 
-# ===================== ОБРАБОТЧИКИ АДМИН-ПАНЕЛИ =====================
 @dp.message(F.text == "🛠 Админ-панель")
-async def handle_admin_panel(message: types.Message, state: FSMContext):
+async def handle_admin_panel(message: types.Message):
     if message.from_user.id not in ADMINS:
-        await message.answer("⛔ У вас нет прав доступа к админ-панели")
+        await message.answer("⛔ У вас нет прав доступа")
+        return
+    
+    await message.answer(
+        "🛠 Панель администратора:",
+        reply_markup=admin_panel_keyboard()
+    )
+
+# Статистика (упрощенная)
+@dp.message(F.text == "📊 Статистика")
+async def handle_admin_stats(message: types.Message):
+    if message.from_user.id not in ADMINS:
         return
     
     try:
-        await message.answer(
-            "🛠 Панель администратора:",
-            reply_markup=admin_panel_keyboard()
-        )
-        await state.set_state(AdminStates.panel)
-    except Exception as e:
-        logging.error(f"Ошибка открытия админ-панели: {str(e)}")
-        await message.answer("⚠️ Ошибка открытия админ-панели")
-
-@dp.message(AdminStates.panel, F.text == "📊 Статистика")
-async def handle_admin_stats(message: types.Message):
-    try:
-        # Статистика пользователей
+        # Основная статистика
         users_data = pickle.loads(cache.get("users_data", b"[]"))
         users_count = len(users_data) if users_data else 0
         
-        # Статистика использования
         stats_data = pickle.loads(cache.get("stats_data", b"[]"))
         orders_count = sum(1 for r in stats_data if len(r) > 8 and r[8] == 'order')
         
-        # Статистика сервера
         import psutil
         cpu_usage = psutil.cpu_percent()
         memory_usage = psutil.virtual_memory().percent
@@ -287,151 +283,74 @@ async def handle_admin_stats(message: types.Message):
             f"• Сервисный режим: {'ВКЛ' if SERVICE_MODE else 'ВЫКЛ'}"
         )
         await message.answer(response, reply_markup=back_to_admin_keyboard())
+        await message.answer(response, reply_markup=admin_panel_keyboard())
         
     except Exception as e:
-        logging.error(f"Ошибка получения статистики: {str(e)}")
         await message.answer(f"❌ Ошибка: {str(e)}", reply_markup=admin_panel_keyboard())
 
-@dp.message(AdminStates.panel, F.text == "📢 Рассылка")
-async def handle_broadcast_start(message: types.Message, state: FSMContext):
+# Рассылка (привязана к существующей функции broadcast)
+@dp.message(F.text == "📢 Рассылка")
+async def handle_broadcast_menu(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMINS:
+        return
+    
     await message.answer(
         "✉️ Введите сообщение для рассылки:",
         reply_markup=cancel_keyboard()
     )
-    await state.set_state(AdminStates.broadcast_message)
+    await state.set_state(AdminBroadcast.message_input)
 
-@dp.message(AdminStates.broadcast_message)
-async def handle_broadcast_message(message: types.Message, state: FSMContext):
-    if message.text == "❌ Отмена":
-        await state.set_state(AdminStates.panel)
-        await message.answer("❌ Рассылка отменена", reply_markup=admin_panel_keyboard())
-        return
-        
-    await state.update_data(broadcast_message=message.html_text)
-    await message.answer(
-        "🎯 Выберите аудиторию для рассылки:",
-        reply_markup=broadcast_target_keyboard()
-    )
-    await state.set_state(AdminStates.broadcast_target)
-
-@dp.message(AdminStates.broadcast_target)
-async def handle_broadcast_target(message: types.Message, state: FSMContext):
-    if message.text == "❌ Отмена":
-        await state.set_state(AdminStates.panel)
-        await message.answer("❌ Рассылка отменена", reply_markup=admin_panel_keyboard())
-        return
-        
-    data = await state.get_data()
-    message_text = data['broadcast_message']
-    
-    # Рассылка всем пользователям
-    if message.text == "Всем пользователям":
-        users_data = pickle.loads(cache.get("users_data", b"[]"))
-        user_ids = [str(user.get("ID пользователя", "")) for user in users_data if user.get("ID пользователя")]
-        success, failed = await send_broadcast(message_text, user_ids)
-        await message.answer(
-            f"✅ Рассылка завершена:\nУспешно: {success}\nНе удалось: {failed}",
-            reply_markup=admin_panel_keyboard()
-        )
-        await state.set_state(AdminStates.panel)
-    
-    # Рассылка по магазинам (пример)
-    elif message.text == "По магазинам":
-        await message.answer(
-            "🏪 Введите номера магазинов через запятую:",
-            reply_markup=cancel_keyboard()
-        )
-        await state.set_state(AdminStates.manual_ids_input)
-    
-    # Другие типы рассылки
-    else:
-        await message.answer(
-            "⏳ Эта функция в разработке",
-            reply_markup=admin_panel_keyboard()
-        )
-        await state.set_state(AdminStates.panel)
-
-@dp.message(AdminStates.manual_ids_input)
-async def handle_manual_ids_input(message: types.Message, state: FSMContext):
-    if message.text == "❌ Отмена":
-        await state.set_state(AdminStates.panel)
-        await message.answer("❌ Рассылка отменена", reply_markup=admin_panel_keyboard())
-        return
-        
-    # Здесь можно реализовать логику фильтрации пользователей
-    # Пока просто отправляем сообщение
-    await message.answer(
-        "✅ Параметры рассылки получены. Начинаю рассылку...",
-        reply_markup=admin_panel_keyboard()
-    )
-    
-    # Фиктивная рассылка для примера
-    await message.answer(
-        "⏳ Рассылка завершена (режим демонстрации)",
-        reply_markup=admin_panel_keyboard()
-    )
-    await state.set_state(AdminStates.panel)
-
-@dp.message(AdminStates.panel, F.text == "🔄 Обновить кэш")
+# Обновление кэша (привязано к существующей команде)
+@dp.message(F.text == "🔄 Обновить кэш")
 async def handle_cache_refresh(message: types.Message):
+    if message.from_user.id not in ADMINS:
+        return
+    
     try:
+        cache.clear()
         await preload_cache()
         await message.answer("✅ Кэш успешно обновлен!", reply_markup=admin_panel_keyboard())
     except Exception as e:
         await message.answer(f"❌ Ошибка обновления кэша: {str(e)}", reply_markup=admin_panel_keyboard())
 
-@dp.message(AdminStates.panel, F.text == "📝 Просмотр логов")
-async def handle_logs_view(message: types.Message):
-    try:
-        # Получаем последние 20 записей логов
-        stats_data = pickle.loads(cache.get("stats_data", b"[]"))
-        if len(stats_data) > 20:
-            logs = stats_data[-20:]
-        else:
-            logs = stats_data
-        
-        log_text = "📝 Последние действия в системе:\n\n"
-        for log in logs:
-            # Проверяем, что лог содержит достаточно элементов
-            if len(log) >= 9:
-                log_text += f"{log[0]} {log[1]} - {log[2]}: {log[7]} ({log[8]})\n"
-            else:
-                log_text += f"Неполная запись: {log}\n"
-        
-        await message.answer(log_text[:4000], reply_markup=admin_panel_keyboard())
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {str(e)}", reply_markup=admin_panel_keyboard())
-
-@dp.message(AdminStates.panel, F.text == "🔧 Сервисный режим")
-async def handle_service_mode(message: types.Message, state: FSMContext):
+# Сервисный режим (упрощенный)
+@dp.message(F.text == "🔧 Сервисный режим")
+async def handle_service_mode_menu(message: types.Message):
+    if message.from_user.id not in ADMINS:
+        return
+    
     status = "🟢 ВКЛЮЧЕН" if SERVICE_MODE else "🔴 ВЫКЛЮЧЕН"
     await message.answer(
         f"🛠 Текущий статус сервисного режима: {status}\nВыберите действие:",
         reply_markup=service_mode_keyboard()
     )
-    await state.set_state(AdminStates.service_mode_manage)
 
-@dp.message(AdminStates.service_mode_manage, F.text == "🟢 Включить сервисный режим")
+@dp.message(F.text == "🟢 Включить сервисный режим")
 async def enable_service_mode(message: types.Message):
+    if message.from_user.id not in ADMINS:
+        return
+    
     global SERVICE_MODE
     SERVICE_MODE = True
     await broadcast("🔧 Бот переходит в сервисный режим. Некоторые функции временно недоступны.")
     await message.answer("✅ Сервисный режим включен", reply_markup=admin_panel_keyboard())
-    await state.set_state(AdminStates.panel)
 
-@dp.message(AdminStates.service_mode_manage, F.text == "🔴 Выключить сервисный режим")
+@dp.message(F.text == "🔴 Выключить сервисный режим")
 async def disable_service_mode(message: types.Message):
+    if message.from_user.id not in ADMINS:
+        return
+    
     global SERVICE_MODE
     SERVICE_MODE = False
     await broadcast("✅ Сервисный режим отключен. Все функции доступны.")
     await message.answer("✅ Сервисный режим выключен", reply_markup=admin_panel_keyboard())
-    await state.set_state(AdminStates.panel)
 
-@dp.message(AdminStates.service_mode_manage, F.text == "🔙 Назад")
-async def back_from_service_mode(message: types.Message):
-    await message.answer("🔙 Возврат в админ-панель", reply_markup=admin_panel_keyboard())
-    await state.set_state(AdminStates.panel)
-
+# Навигация назад
+@dp.message(F.text == "🔙 Главное меню")
+async def handle_back_to_main(message: types.Message):
+    await message.answer(
+        "🔙 Возврат в главное меню",
+        reply_markup=main_menu_keyboard(message.from_user.id)
 
 
 
@@ -1567,29 +1486,21 @@ async def confirm_broadcast(message: types.Message, state: FSMContext):
     await state.clear()
 
 async def send_broadcast(message_text: str, user_ids: list) -> tuple:
-    """Улучшенная функция рассылки с обработкой ошибок"""
+    """Улучшенная функция рассылки"""
     success = 0
     failed = 0
-    failed_ids = []
     
     for user_id in user_ids:
         try:
-            # Пропускаем пустые ID
-            if not user_id or not user_id.strip():
+            if not user_id.strip():
                 continue
                 
             await bot.send_message(int(user_id), message_text)
             success += 1
-            await asyncio.sleep(0.1)  # Ограничение частоты отправки
+            await asyncio.sleep(0.1)  # Защита от ограничений
         except Exception as e:
             failed += 1
-            failed_ids.append(user_id)
-            logging.error(f"Ошибка рассылки: {user_id} - {str(e)}")
-    
-    # Логирование результатов
-    logging.info(f"Рассылка завершена: успешно={success}, неудачно={failed}")
-    if failed_ids:
-        logging.info(f"Не удалось отправить: {', '.join(failed_ids)}")
+            logging.error(f"Broadcast error to {user_id}: {str(e)}")
     
     return success, failed
     await bot.send_message(
@@ -1609,14 +1520,14 @@ STATS_COLUMNS = [
 ]
 
 async def log_user_activity(user_id: str, command: str, event_type: str = "command"):
-    """Запись информации о действии пользователя"""
+    """Запись информации о действии пользователя (упрощенная)"""
     try:
         user_data = await get_user_data(str(user_id))
         if not user_data:
             return
             
-        # Формируем запись для логирования
-        new_record = [
+        # Формируем запись
+        record = [
             datetime.now().strftime("%d.%m.%Y"),
             datetime.now().strftime("%H:%M:%S"),
             str(user_id),
@@ -1629,16 +1540,10 @@ async def log_user_activity(user_id: str, command: str, event_type: str = "comma
         ]
         
         stats_sheet = main_spreadsheet.worksheet(STATSS_SHEET_NAME)
-        stats_sheet.append_row(new_record)
-        
-        # Обновляем кэш статистики
-        if "stats_data" in cache:
-            stats_data = pickle.loads(cache["stats_data"])
-            stats_data.append(new_record)
-            cache["stats_data"] = pickle.dumps(stats_data[-1000:])  # Храним последние 1000 записей
+        stats_sheet.append_row(record)
         
     except Exception as e:
-        logging.error(f"Ошибка логирования статистики: {str(e)}")
+        logging.error(f"Ошибка логирования: {str(e)}")
 
 # ===================== ОБЩАЯ ЛОГИКА ЗАПУСКА =====================
 async def scheduled_cache_update():
