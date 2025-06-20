@@ -1549,9 +1549,9 @@ async def log_user_activity(user_id: str, command: str, event_type: str = "comma
         if not user_data:
             return
         if "stats_data" in cache:
-        stats_data = pickle.loads(cache["stats_data"])
-        stats_data.append(new_record)
-        cache["stats_data"] = pickle.dumps(stats_data[-1000:])
+            stats_data = pickle.loads(cache["stats_data"])
+            stats_data.append(new_record)
+            cache["stats_data"] = pickle.dumps(stats_data[-1000:])
         stats_sheet = main_spreadsheet.worksheet(STATSS_SHEET_NAME)
         stats_sheet.append_row([
             datetime.now().strftime("%d.%m.%Y"),
