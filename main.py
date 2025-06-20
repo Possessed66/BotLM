@@ -804,8 +804,7 @@ async def handle_info_request(message: types.Message, state: FSMContext):
         return
         
     await state.update_data(shop=user_data['shop'])
-    await message.answer("🔢 Введите артикул товара:", 
-                        reply_markup=article_input_keyboard())
+    await message.answer("🔢 Введите артикул товара:",reply_markup=cancel_keyboard())
     await state.set_state(InfoRequest.article_input)
 
 @dp.message(InfoRequest.article_input)
