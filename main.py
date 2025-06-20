@@ -484,7 +484,7 @@ async def service_mode_middleware(handler, event, data):
             return
     return await handler(event, data)
 
-@@dp.update.middleware()
+@dp.update.middleware()
 async def activity_tracker_middleware(handler, event, data):
     """Улучшенный трекинг активности пользователя"""
     state = data.get('state')
