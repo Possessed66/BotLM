@@ -472,22 +472,26 @@ async def service_mode_middleware(handler, event, data):
 
 @dp.update.middleware()
 async def activity_tracker_middleware(handler, event, data):
-    """Отслеживание активности пользователя"""
+    """Отслеживание активности пользователя с исключениями"""
     state = data.get('state')
     if state:
         current_state = await state.get_state()
         if current_state:
+            state_name = current_state.split(':')[-1]
+            
+            # Исключение для состояний рассылки - не применяем таймаут
+            if state_name.startswith("AdminBroadcast"):
+                return await handler(event, data)
+                
             state_data = await state.get_data()
             last_activity = state_data.get('last_activity', datetime.min)
             
-            # Обработка строкового формата
             if isinstance(last_activity, str):
                 try:
                     last_activity = datetime.fromisoformat(last_activity)
                 except (ValueError, TypeError):
                     last_activity = datetime.min
             
-            # Проверка только если это datetime
             if isinstance(last_activity, datetime):
                 if datetime.now() - last_activity > timedelta(minutes=20):
                     await state.clear()
@@ -497,7 +501,6 @@ async def activity_tracker_middleware(handler, event, data):
                         await event.callback_query.message.answer("🕒 Сессия истекла. Начните заново.")
                     return
 
-            # Всегда обновляем время активности
             await state.update_data(last_activity=datetime.now().isoformat())
     
     return await handler(event, data)
@@ -771,6 +774,7 @@ async def process_order_reason(message: types.Message, state: FSMContext):
     await message.answer(response, reply_markup=confirm_keyboard())
     await state.set_state(OrderStates.confirmation)
 
+
 @dp.message(OrderStates.confirmation, F.text == "✅ Подтвердить")
 async def final_confirmation(message: types.Message, state: FSMContext):
     """Подтверждение заказа"""
@@ -810,12 +814,14 @@ async def final_confirmation(message: types.Message, state: FSMContext):
         await log_error(message.from_user.id, f"Ошибка сохранения заказа: {str(e)}")
         await message.answer(f"⚠️ Ошибка сохранения: {str(e)}")
 
+
 @dp.message(OrderStates.confirmation, F.text == "✏️ Исправить количество")
 async def correct_quantity(message: types.Message, state: FSMContext):
     """Корректировка количества"""
     await message.answer("🔢 Введите новое количество:", 
                         reply_markup=types.ReplyKeyboardRemove())
     await state.set_state(OrderStates.quantity_input)
+
 
 # Запрос информации о товаре
 @dp.message(F.text == "📋 Запрос информации")
@@ -832,6 +838,7 @@ async def handle_info_request(message: types.Message, state: FSMContext):
     await state.update_data(shop=user_data['shop'])
     await message.answer("🔢 Введите артикул товара:",reply_markup=cancel_keyboard())
     await state.set_state(InfoRequest.article_input)
+
 
 @dp.message(InfoRequest.article_input)
 async def process_info_request(message: types.Message, state: FSMContext):
@@ -874,7 +881,9 @@ async def process_info_request(message: types.Message, state: FSMContext):
     await message.answer(response, reply_markup=main_menu_keyboard(message.from_user.id))
     await state.clear()
 
-# Администрирование
+
+
+##=============================ОБРАБОТЧИКИ АДМИН ПАНЕЛИ====================================
 @dp.message(F.text == "🛠 Админ-панель")
 async def handle_admin_panel(message: types.Message):
     """Панель администратора"""
@@ -884,6 +893,7 @@ async def handle_admin_panel(message: types.Message):
     
     await message.answer("🛠 Панель администратора:", 
                         reply_markup=admin_panel_keyboard())
+
 
 @dp.message(F.text == "📊 Статистика")
 async def handle_admin_stats(message: types.Message):
@@ -929,6 +939,10 @@ async def handle_admin_stats(message: types.Message):
     except Exception as e:
         await message.answer(f"❌ Ошибка: {str(e)}", reply_markup=admin_panel_keyboard())
 
+
+
+
+##===============РАССЫЛКА=================
 @dp.message(F.text == "📢 Рассылка")
 async def handle_broadcast_menu(message: types.Message, state: FSMContext):
     """Начало рассылки"""
@@ -960,26 +974,102 @@ async def handle_broadcast_all(message: types.Message, state: FSMContext):
                         reply_markup=admin_panel_keyboard())
     await state.clear()
 
-async def send_broadcast(message_text: str, user_ids: list) -> None:
-    """Асинхронная рассылка сообщений"""
-    success, failed = 0, 0
-    
-    for user_id in user_ids:
-        try:
-            if not user_id.strip():
-                continue
+@dp.message(AdminBroadcast.confirmation, F.text == "✅ Подтвердить рассылку")
+async def confirm_broadcast(message: types.Message, state: FSMContext):
+    """Подтверждение рассылки с улучшенной обработкой"""
+    try:
+        await state.update_data(last_activity=datetime.now().isoformat())
+        data = await state.get_data()
+        
+        # Проверяем наличие необходимых данных
+        if 'content' not in data or 'target' not in data:
+            await message.answer("❌ Ошибка: данные рассылки повреждены")
+            await state.clear()
+            return
+            
+        content = data['content']
+        target = data.get('target', 'all')
+        user_ids = data.get('user_ids', [])
+        
+        # Логирование
+        logs_sheet.append_row([
+            datetime.now().strftime("%d.%m.%Y %H:%M"),
+            message.from_user.id,
+            "BROADCAST",
+            f"Type: {content.get('type', 'text')}, Target: {target}"
+        ])
+        
+        await message.answer("🔄 Начинаю рассылку...", reply_markup=admin_panel_keyboard())
+        
+        # Асинхронная рассылка без блокировки
+        asyncio.create_task(execute_broadcast(content, target, user_ids))
+        
+        await state.clear()
+        
+    except Exception as e:
+        logging.error(f"Ошибка подтверждения рассылки: {str(e)}")
+        await message.answer("❌ Произошла ошибка при запуске рассылки", 
+                            reply_markup=admin_panel_keyboard())
+        await state.clear()
+
+async def execute_broadcast(content: dict, target: str, user_ids: list):
+    """Выполнение рассылки с улучшенной обработкой"""
+    try:
+        # Получаем список пользователей в зависимости от цели
+        if target == "manual":
+            recipients = user_ids
+        else:
+            users_data = pickle.loads(cache.get("users_data", b"[]"))
+            recipients = [str(user.get("ID пользователя", "")) for user in users_data]
+        
+        success = 0
+        errors = 0
+        
+        for user_id in recipients:
+            try:
+                if not user_id.strip():
+                    continue
+                    
+                # Отправляем в зависимости от типа контента
+                if content['type'] == 'text':
+                    await bot.send_message(int(user_id), content['text'])
+                elif content['type'] == 'photo':
+                    await bot.send_photo(
+                        int(user_id), 
+                        content['media'],
+                        caption=content.get('caption', '')
+                    )
+                elif content['type'] == 'document':
+                    await bot.send_document(
+                        int(user_id), 
+                        content['media'],
+                        caption=content.get('caption', '')
+                    )
                 
-            await bot.send_message(int(user_id), message_text)
-            success += 1
-            await asyncio.sleep(0.1)
-        except Exception as e:
-            failed += 1
-            logging.error(f"Ошибка рассылки для {user_id}: {str(e)}")
-    
-    await bot.send_message(
-        ADMINS[0],
-        f"📊 Результаты рассылки:\n✅ Успешно: {success}\n❌ Не удалось: {failed}"
-    )
+                success += 1
+                await asyncio.sleep(0.1)  # Защита от ограничений
+                
+            except Exception as e:
+                errors += 1
+                logging.error(f"Ошибка рассылки для {user_id}: {str(e)}")
+                
+        # Уведомление администратору
+        await bot.send_message(
+            ADMINS[0],
+            f"📊 Результаты рассылки:\n✅ Успешно: {success}\n❌ Ошибок: {errors}"
+        )
+        
+    except Exception as e:
+        logging.critical(f"Критическая ошибка рассылки: {str(e)}")
+        # Попытка уведомить администратора об ошибке
+        try:
+            await bot.send_message(
+                ADMINS[0],
+                f"🚨 Рассылка завершилась с ошибкой: {str(e)}"
+            )
+        except:
+            pass
+
 
 @dp.message(F.text == "🔄 Обновить кэш")
 async def handle_cache_refresh(message: types.Message):
