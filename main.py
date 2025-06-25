@@ -370,6 +370,8 @@ async def get_product_info(article: str, shop: str) -> Optional[Dict[str, Any]]:
         gamma_index = pickle.loads(cache.get("gamma_index", b""))
         key = (str(article).strip(), str(shop).strip())
         product_data = gamma_index.get(key)
+
+        top_in_shop = product_data.get("Топ в магазине", "0").strip()
         
         if not product_data:
             return None
@@ -391,6 +393,7 @@ async def get_product_info(article: str, shop: str) -> Optional[Dict[str, Any]]:
                 'Отдел': str(product_data.get('Отдел', '')),
                 'Магазин': shop,
                 'Поставщик': 'Товар РЦ'
+                'Топ в магазине': top_in_shop
             }
         
         # Парсинг данных поставщика
@@ -407,6 +410,7 @@ async def get_product_info(article: str, shop: str) -> Optional[Dict[str, Any]]:
             'Дата заказа': order_date,
             'Дата поставки': delivery_date,
             'Номер поставщика': supplier_id
+            'Топ в магазине': top_in_shop
         }
     
     except Exception as e:
@@ -448,6 +452,7 @@ async def preload_cache() -> None:
                     "Название": item.get("Название", ""),
                     "Отдел": item.get("Отдел", ""),
                     "Номер осн. пост.": item.get("Номер осн. пост.", "")
+                    "Топ в магазине": str(item.get("Топ в магазине", "0"))
                 }
         
         cache["gamma_index"] = pickle.dumps(gamma_index)
@@ -741,13 +746,18 @@ async def continue_order_process(message: types.Message, state: FSMContext):
         f"📅 Дата заказа: {product_info['Дата заказа']}\n"
         f"🚚 Дата поставки: {product_info['Дата поставки']}\n"
     )
+
+    if product_info.get('Топ в магазине', '0') == '0':
+        response += "\n⚠️ <b>Внимание, артикул в ТОП 0!</b>\nСвяжись с менеджером для уточнения возможности заказа"
+
     
     await state.update_data(
         product_name=product_info['Название'],
         department=product_info['Отдел'],
         supplier_name=product_info['Поставщик'],
         order_date=product_info['Дата заказа'],  
-        delivery_date=product_info['Дата поставки']  
+        delivery_date=product_info['Дата поставки']
+        top_in_shop=product_info.get('Топ в магазине', '0')
     )
     
     await message.answer(response)
@@ -777,6 +787,10 @@ async def process_order_reason(message: types.Message, state: FSMContext):
     
     data = await state.get_data()
     selected_shop = data.get('selected_shop')
+
+    warning = ""
+    if data.get('top_in_shop', '0') == '0':
+        warning = "\n\n⚠️ <b>Внимание, артикул в ТОП 0!</b>\nСвяжись с менеджером для уточнения возможности заказа"
     
     response = (
         "🔎 Проверьте данные заказа:\n"
@@ -788,6 +802,7 @@ async def process_order_reason(message: types.Message, state: FSMContext):
         f"🚚 Дата поставки: {data['delivery_date']}\n"
         f"Количество: {data['quantity']}\n"
         f"Номер заказа/Причина: {reason}\n"
+        f"{warning}"
     )
     
     await message.answer(response, reply_markup=confirm_keyboard())
