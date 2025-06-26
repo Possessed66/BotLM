@@ -392,7 +392,7 @@ async def get_product_info(article: str, shop: str) -> Optional[Dict[str, Any]]:
                 'Название': product_data.get('Название', ''),
                 'Отдел': str(product_data.get('Отдел', '')),
                 'Магазин': shop,
-                'Поставщик': 'Товар РЦ'
+                'Поставщик': 'Товар РЦ',
                 'Топ в магазине': top_in_shop
             }
         
@@ -409,7 +409,7 @@ async def get_product_info(article: str, shop: str) -> Optional[Dict[str, Any]]:
             'Поставщик': supplier_name,
             'Дата заказа': order_date,
             'Дата поставки': delivery_date,
-            'Номер поставщика': supplier_id
+            'Номер поставщика': supplier_id,
             'Топ в магазине': top_in_shop
         }
     
@@ -451,7 +451,7 @@ async def preload_cache() -> None:
                 gamma_index[key] = {
                     "Название": item.get("Название", ""),
                     "Отдел": item.get("Отдел", ""),
-                    "Номер осн. пост.": item.get("Номер осн. пост.", "")
+                    "Номер осн. пост.": item.get("Номер осн. пост.", ""),
                     "Топ в магазине": str(item.get("Топ в магазине", "0"))
                 }
         
@@ -756,7 +756,7 @@ async def continue_order_process(message: types.Message, state: FSMContext):
         department=product_info['Отдел'],
         supplier_name=product_info['Поставщик'],
         order_date=product_info['Дата заказа'],  
-        delivery_date=product_info['Дата поставки']
+        delivery_date=product_info['Дата поставки'],
         top_in_shop=product_info.get('Топ в магазине', '0')
     )
     
