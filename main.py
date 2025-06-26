@@ -876,7 +876,7 @@ async def handle_info_request(message: types.Message, state: FSMContext):
 
 @dp.message(InfoRequest.article_input)
 async def process_info_request(message: types.Message, state: FSMContext):
-    """Обработка запроса информации"""
+    """Обработка запроса информации о товаре"""
     # Обработка фото
     if message.photo:
         photo = message.photo[-1]
@@ -901,6 +901,7 @@ async def process_info_request(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
+    # Формируем основной ответ
     response = (
         f"🔍 Информация о товаре:\n"
         f"Магазин: {user_shop}\n"
@@ -911,6 +912,11 @@ async def process_info_request(message: types.Message, state: FSMContext):
         f"🚚 Ожидаемая дата поставки: {product_info['Дата поставки']}\n"
         f"🏭 Поставщик: {product_info['Поставщик']}" 
     )
+    
+    # ДОБАВЛЕНО: Проверка и добавление предупреждения для ТОП 0
+    top_in_shop = product_info.get('Топ в магазине', '0')
+    if top_in_shop == '0':
+        response += "\n\n⚠️ <b>ВНИМАНИЕ: Артикул в ТОП 0!</b>\nСвяжись с менеджером для уточнения информации"
     
     await message.answer(response, reply_markup=main_menu_keyboard(message.from_user.id))
     await state.clear()
