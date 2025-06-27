@@ -9,7 +9,7 @@ import logging
 import traceback
 from pyzbar.pyzbar import decode
 from aiogram.exceptions import TelegramBadRequest
-from PIL import Image
+from PIL import Image, ImageEnhance
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
@@ -300,69 +300,100 @@ def calculate_delivery_date(supplier_data: dict) -> Tuple[str, str]:
     )
 
 async def process_barcode_image(photo: types.PhotoSize) -> Tuple[Optional[str], Optional[str]]:
-    """Обработка изображения со штрих-кодом с улучшенной загрузкой файлов"""
+    """Улучшенная обработка изображений со штрих-кодом"""
+    start_time = time.monotonic()
+    # Проверка кэша штрих-кодов
+    if "barcodes_index" not in cache or not cache["barcodes_index"]:
+        return None, "Система штрих-кодов не настроена"
+
+    # Выбираем фото наилучшего качества
+    best_photo = max(photo, key=lambda p: p.width * p.height)
+    
     try:
-        # Проверка кэша штрих-кодов
-        if "barcodes_index" not in cache or not cache["barcodes_index"]:
-            return None, "Система штрих-кодов не настроена"
-        
-        # Скачиваем фото с повторными попытками
-        for attempt in range(3):
-            try:
-                file = await bot.get_file(photo.file_id)
-                image_bytes = await bot.download(file.file_path)
-                break
-            except TelegramBadRequest as e:
-                if "temporarily unavailable" in str(e) and attempt < 2:
-                    await asyncio.sleep(1)  # Пауза перед повторной попыткой
-                    continue
-                raise
-        
-        # Проверка размера
-        if len(image_bytes) > MAX_IMAGE_SIZE:
-            return None, f"Изображение слишком большое (> {MAX_IMAGE_SIZE//1024}KB)"
-        
+        # Проверяем размер файла перед скачиванием
+        file_info = await bot.get_file(best_photo.file_id)
+        if file_info.file_size > MAX_IMAGE_SIZE:
+            return None, f"Изображение слишком большое ({file_info.file_size//1024}KB > {MAX_IMAGE_SIZE//1024}KB)"
+
+        # Скачиваем изображение частями с проверкой размера
+        image_bytes = b""
+        async with IMAGE_PROCESSING_SEMAPHORE:
+            async for chunk in bot.download(file_info.file_path, destination=None):
+                if len(image_bytes) + len(chunk) > MAX_IMAGE_SIZE:
+                    return None, "Превышен максимальный размер изображения"
+                image_bytes += chunk
+
         # Обработка в отдельном потоке
         loop = asyncio.get_running_loop()
-        image = None
-        
-        try:
-            with io.BytesIO(image_bytes) as buffer:
-                image = await loop.run_in_executor(
-                    image_processor, 
-                    Image.open, 
-                    buffer
-                )
-                image = image.convert('L')
-                image.thumbnail((800, 800))
-                
-                decoded_objects = await asyncio.wait_for(
-                    loop.run_in_executor(image_processor, decode, image),
-                    timeout=10.0
-                )
-        finally:
-            if image:
-                image.close()
-            del image_bytes
-            gc.collect()
+        decoded_objects = None
+    
+        def process_image():
+            """Синхронная обработка изображения"""
+            nonlocal decoded_objects
+            try:
+                # Оптимизация изображения перед распознаванием
+                with io.BytesIO(image_bytes) as buffer:
+                    with Image.open(buffer) as img:
+                        # Конвертируем в grayscale для улучшения распознавания
+                        img = img.convert('L')
+                        
+                        # Увеличиваем контраст
+                        enhancer = ImageEnhance.Contrast(img)
+                        img = enhancer.enhance(2.0)
+                        
+                        # Масштабируем, сохраняя пропорции
+                        scale_factor = 800 / max(img.width, img.height)
+                        new_size = (int(img.width * scale_factor), int(img.height * scale_factor))
+                        img = img.resize(new_size, Image.LANCZOS)
+                        
+                        # Распознаем штрих-коды
+                        return decode(img)
+            except Exception as e:
+                logging.error(f"Ошибка обработки изображения: {str(e)}")
+                return None
+    
+        # Выполняем в thread pool с таймаутом
+        decoded_objects = await asyncio.wait_for(
+            loop.run_in_executor(image_processor, process_image),
+            timeout=15.0
+        )
         
         if not decoded_objects:
             return None, "Штрих-код не распознан"
-        
-        barcode_data = decoded_objects[0].data.decode("utf-8").strip()
+
+        # Обрабатываем все найденные штрих-коды
         barcodes_index = pickle.loads(cache["barcodes_index"])
-        article = barcodes_index.get(barcode_data)
+        for obj in decoded_objects:
+            try:
+                barcode_data = obj.data.decode("utf-8").strip()
+                if article := barcodes_index.get(barcode_data):
+                    return article, None
+            except UnicodeDecodeError:
+                # Пробуем альтернативные кодировки
+                for encoding in ['latin-1', 'cp1251']:
+                    try:
+                        barcode_data = obj.data.decode(encoding).strip()
+                        if article := barcodes_index.get(barcode_data):
+                            return article, None
+                    except:
+                        continue
         
-        return article, None if article else f"Штрих-код {barcode_data} не найден"
-        
-    except TelegramBadRequest as e:
-        logging.error(f"Ошибка Telegram при загрузке файла: {str(e)}")
-        return None, "Файл временно недоступен, попробуйте позже"
+        return None, "Распознанный штрих-код не найден в базе"
+    
     except asyncio.TimeoutError:
         return None, "Превышено время обработки изображения"
+    except TelegramBadRequest as e:
+        logging.error(f"Ошибка Telegram: {str(e)}")
+        return None, "Ошибка загрузки файла"
     except Exception as e:
-        logging.exception(f"Общая ошибка обработки штрих-кода: {str(e)}")
+        logging.exception(f"Критическая ошибка обработки: {str(e)}")
         return None, "Ошибка обработки изображения"
+    finally:
+        duration = time.monotonic() - start_time
+        logging.info(f"Barcode processing took {duration:.2f} seconds")
+        # Принудительная очистка памяти
+        del image_bytes
+        gc.collect()
 
 async def get_product_info(article: str, shop: str) -> Optional[Dict[str, Any]]:
     """Получение информации о товаре"""
@@ -670,29 +701,44 @@ async def process_article_manual(message: types.Message, state: FSMContext):
 
 @dp.message(OrderStates.barcode_scan, F.photo)
 async def handle_barcode_scan(message: types.Message, state: FSMContext):
-    """Обработка фото штрих-кода"""
+    """Обработка фото штрих-кода с улучшенной логикой"""
     try:
+        # Показываем статус обработки
         processing_msg = await message.answer("🔍 Обработка изображения...")
-        photo = message.photo[-1]
-        article, error = await process_barcode_image(photo)
+        
+        # Обрабатываем изображение
+        article, error = await process_barcode_image(message.photo)
+        
+        # Удаляем сообщение о статусе
         await processing_msg.delete()
         
         if error:
-            await message.answer(f"❌ {error}\nПопробуйте еще раз или введите артикул вручную.",
-                                reply_markup=article_input_keyboard())
+            # Предлагаем альтернативные варианты
+            await message.answer(
+                f"❌ {error}\nПопробуйте:\n"
+                "- Сфотографировать код при хорошем освещении\n"
+                "- Убедиться, что код не поврежден\n"
+                "- Или введите артикул вручную",
+                reply_markup=article_input_keyboard()
+            )
             await state.set_state(OrderStates.article_input)
             return
             
+        # Успешное распознавание
         await state.update_data(article=article)
-        await message.answer(f"✅ Штрих-код распознан!\nАртикул: {article}")
+        await message.answer(f"✅ Штрих-код распознан! Артикул: {article}")
+        
+        # Переходим к выбору магазина
         await message.answer("📌 Выберите магазин для заказа:", 
                             reply_markup=shop_selection_keyboard())
         await state.set_state(OrderStates.shop_selection)
         
     except Exception as e:
         logging.exception("Barcode scan error")
-        await message.answer("⚠️ Произошла ошибка при обработке изображения.", 
-                            reply_markup=article_input_keyboard())
+        await message.answer(
+            "⚠️ Произошла критическая ошибка. Попробуйте другой способ ввода.",
+            reply_markup=article_input_keyboard()
+        )
         await state.set_state(OrderStates.article_input)
 
 @dp.message(OrderStates.shop_selection)
