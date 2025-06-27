@@ -8,6 +8,7 @@ import asyncio
 import logging
 import traceback
 import time
+import threading
 from pyzbar.pyzbar import decode
 from aiogram.exceptions import TelegramBadRequest
 from PIL import Image, ImageEnhance
@@ -299,6 +300,10 @@ def calculate_delivery_date(supplier_data: dict) -> Tuple[str, str]:
         order_date.strftime("%d.%m.%Y"),
         delivery_date.strftime("%d.%m.%Y")
     )
+
+
+IMAGE_PROCESSING_SEMAPHORE = asyncio.Semaphore(MAX_WORKERS)
+
 
 async def process_barcode_image(photo: types.PhotoSize) -> Tuple[Optional[str], Optional[str]]:
     """Улучшенная обработка изображений со штрих-кодом"""
