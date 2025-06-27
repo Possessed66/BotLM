@@ -325,7 +325,7 @@ async def process_barcode_image(photo: types.PhotoSize) -> Tuple[Optional[str], 
         image_bytes = b""
         async with IMAGE_PROCESSING_SEMAPHORE:
             file = await bot.get_file(photo.file_id)
-            async for chunk in file.download(destination=None)::
+            async for chunk in file.download(destination=None):
                 if len(image_bytes) + len(chunk) > MAX_IMAGE_SIZE:
                     return None, "Превышен максимальный размер изображения"
                 image_bytes += chunk
