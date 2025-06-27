@@ -21,7 +21,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.enums import ParseMode
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
-from aiogram.types import ReplyKeyboardRemove
+from aiogram.types import ReplyKeyboardRemove, File
 from aiogram.exceptions import TelegramForbiddenError
 from aiogram.filters import Command
 from contextlib import suppress
@@ -324,7 +324,8 @@ async def process_barcode_image(photo: types.PhotoSize) -> Tuple[Optional[str], 
         # Скачиваем изображение частями с проверкой размера
         image_bytes = b""
         async with IMAGE_PROCESSING_SEMAPHORE:
-            async for chunk in bot.download(file_info.file_path, destination=None):
+            file = await bot.get_file(photo.file_id)
+            async for chunk in file.download(destination=None)::
                 if len(image_bytes) + len(chunk) > MAX_IMAGE_SIZE:
                     return None, "Превышен максимальный размер изображения"
                 image_bytes += chunk
