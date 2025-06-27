@@ -7,6 +7,7 @@ import gc
 import asyncio
 import logging
 import traceback
+import time
 from pyzbar.pyzbar import decode
 from aiogram.exceptions import TelegramBadRequest
 from PIL import Image, ImageEnhance
