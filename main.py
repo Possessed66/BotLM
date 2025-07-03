@@ -31,6 +31,92 @@ from gspread.exceptions import APIError, SpreadsheetNotFound
 from cachetools import LRUCache
 import psutil
 
+
+# ===================== ГЛОБАЛЬНАЯ ОБРАБОТКА ОШИБОК =====================
+from aiogram.fsm.storage.base import StorageKey
+
+async def global_error_handler(event: types.ErrorEvent, bot: Bot):
+    """Централизованный обработчик всех необработанных исключений"""
+    exception = event.exception
+    update = event.update
+    
+    # Получаем идентификатор пользователя
+    user_id = None
+    if update.message:
+        user_id = update.message.from_user.id
+    elif update.callback_query:
+        user_id = update.callback_query.from_user.id
+    
+    # Формируем сообщение об ошибке
+    error_type = type(exception).__name__
+    error_message = str(exception) or "Без описания"
+    traceback_str = "".join(traceback.format_exception(type(exception), exception, exception.__traceback__))
+    
+    # Логируем в консоль
+    logging.critical(
+        f"ГЛОБАЛЬНАЯ ОШИБКА [user:{user_id}]\n"
+        f"Type: {error_type}\n"
+        f"Message: {error_message}\n"
+        f"Traceback:\n{traceback_str}"
+    )
+    
+    # Логируем в Google Sheets
+    if user_id:
+        try:
+            logs_sheet.append_row([
+                datetime.now().strftime("%d.%m.%Y %H:%M"),
+                str(user_id),
+                "CRITICAL_ERROR",
+                f"{error_type}: {error_message[:200]}"
+            ])
+        except Exception as log_ex:
+            logging.error(f"Ошибка при логировании: {str(log_ex)}")
+    
+    # Уведомляем администраторов
+    for admin_id in ADMINS:
+        try:
+            await bot.send_message(
+                admin_id,
+                f"🚨 <b>Критическая ошибка</b>\n"
+                f"• Пользователь: {user_id}\n"
+                f"• Тип: {error_type}\n"
+                f"• Сообщение: {error_message}\n\n"
+                f"<code>{traceback_str[:3500]}</code>",
+                parse_mode=ParseMode.HTML
+            )
+        except Exception:
+            pass
+    
+    # Отправляем сообщение пользователю
+    if user_id:
+        try:
+            await bot.send_message(
+                user_id,
+                "⚠️ Произошла непредвиденная ошибка. Администратор уведомлен.\n"
+                "Попробуйте позже или начните заново с команды /start",
+                reply_markup=ReplyKeyboardRemove()
+            )
+        except Exception:
+            pass
+    
+    # Очищаем состояние пользователя
+    if user_id:
+        try:
+            state = FSMContext(
+                storage=dp.storage,
+                key=StorageKey(
+                    bot_id=bot.id,
+                    chat_id=user_id,
+                    user_id=user_id
+                )
+            )
+            await state.clear()
+        except Exception:
+            pass
+    
+    return True
+
+
 # ===================== КОНФИГУРАЦИЯ =====================
 logging.basicConfig(
     level=logging.INFO,
@@ -80,6 +166,7 @@ bot = Bot(
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
 dp = Dispatcher()
+dp.errors.register(global_error_handler)
 
 # Инициализация таблиц
 try:
@@ -262,6 +349,12 @@ async def log_user_activity(user_id: str, command: str, event_type: str = "comma
         stats_sheet.append_row(record)
     except Exception as e:
         logging.error(f"Ошибка логирования активности: {str(e)}")
+
+
+
+
+# =============================ПАРСЕР=================================
+
 
 def parse_supplier_data(record: dict) -> Dict[str, Any]:
     """Парсинг данных поставщика"""
@@ -532,48 +625,71 @@ async def activity_tracker_middleware(handler, event, data):
     """Улучшенный трекинг активности пользователя"""
     state = data.get('state')
     if state:
-        current_state = await state.get_state()
-        if current_state:
-            # Получаем данные состояния
-            state_data = await state.get_data()
-            
-            # Инициализируем last_activity, если отсутствует
-            last_activity = state_data.get('last_activity')
-            if not last_activity:
-                await state.update_data(last_activity=datetime.now().isoformat())
-                return await handler(event, data)
-            
-            # Преобразуем строку в datetime при необходимости
-            if isinstance(last_activity, str):
-                try:
-                    last_activity = datetime.fromisoformat(last_activity)
-                except ValueError:
-                    last_activity = datetime.min
-            
-            # Проверяем таймаут
-            if datetime.now() - last_activity > timedelta(minutes=20):
-                await state.clear()
-                if event.message:
-                    await event.message.answer("🕒 Сессия истекла. Начните заново.")
-                elif event.callback_query:
-                    await event.callback_query.message.answer("🕒 Сессия истекла. Начните заново.")
-                return
-            
-            # Обновляем время активности ПОСЛЕ обработки сообщения
-            # Это ключевое изменение!
-            response = await handler(event, data)
+        # Инициализируем last_activity при создании состояния
+        state_data = await state.get_data()
+        if 'last_activity' not in state_data:
             await state.update_data(last_activity=datetime.now().isoformat())
-            return response
+        
+        # Обновляем активность ПОСЛЕ обработки сообщения
+        response = await handler(event, data)
+        await state.update_data(last_activity=datetime.now().isoformat())
+        return response
     
     return await handler(event, data)
+
+
+# ===================== АВТОМАТИЧЕСКАЯ ОЧИСТКА СОСТОЯНИЙ =====================
+async def state_cleanup_task():
+    """Фоновая задача для очистки устаревших состояний"""
+    while True:
+        try:
+            now = datetime.now()
+            cleared_count = 0
+            total_states = 0
+            
+            # Получаем все активные состояния
+            states = dp.storage.storage
+            
+            for key, state_data in states.items():
+                total_states += 1
+                data = state_data.get('data', {})
+                last_activity_str = data.get('last_activity')
+                
+                if not last_activity_str:
+                    continue
+                
+                # Преобразуем строку в datetime
+                try:
+                    last_activity = datetime.fromisoformat(last_activity_str)
+                except (TypeError, ValueError):
+                    continue
+                
+                # Проверяем таймаут (30 минут)
+                if (now - last_activity) > timedelta(minutes=30):
+                    await dp.storage.set_state(key=key, state=None)
+                    await dp.storage.set_data(key=key, data={})
+                    cleared_count += 1
+            
+            # Логируем результат очистки
+            if cleared_count > 0:
+                logging.info(f"Автоочистка: очищено {cleared_count}/{total_states} состояний")
+            
+            # Пауза между проверками (15 минут)
+            await asyncio.sleep(900)
+                
+        except Exception as e:
+            logging.error(f"Ошибка в задаче очистки состояний: {str(e)}")
+            await asyncio.sleep(300)  # Пауза при ошибке
+
 
 # ===================== ОБРАБОТЧИКИ КОМАНД =====================
 @dp.message(Command("start"))
 async def start_handler(message: types.Message, state: FSMContext):
     """Обработчик команды /start"""
+    # Инициализируем активность в состоянии
     await state.update_data(last_activity=datetime.now().isoformat())
-    user_data = await get_user_data(str(message.from_user.id))
     
+    user_data = await get_user_data(str(message.from_user.id))
     if user_data:
         await message.answer("ℹ️ Вы в главном меню:", 
                             reply_markup=main_menu_keyboard(message.from_user.id))
@@ -613,22 +729,19 @@ async def process_shop(message: types.Message, state: FSMContext):
         return
     
     data = await state.get_data()
-    try:
-        users_sheet.append_row([
-            str(message.from_user.id),
-            data['name'],
-            data['surname'],
-            data['position'],
-            shop,
-            datetime.now().strftime("%d.%m.%Y %H:%M")
-        ])
-        cache.pop(f"user_{message.from_user.id}", None)  # Сброс кэша пользователя
-        await message.answer("✅ Регистрация завершена!", 
+    users_sheet.append_row([
+        str(message.from_user.id),
+        data['name'],
+        data['surname'],
+        data['position'],
+        shop,
+        datetime.now().strftime("%d.%m.%Y %H:%M")
+    ])
+    cache.pop(f"user_{message.from_user.id}", None)  # Сброс кэша пользователя
+    await message.answer("✅ Регистрация завершена!", 
                             reply_markup=main_menu_keyboard(message.from_user.id))
-        await state.clear()
-    except Exception as e:
-        await message.answer("⚠️ Ошибка сохранения данных!")
-        await log_error(str(message.from_user.id), str(e))
+    await state.clear()
+
 
 # Навигация
 @dp.message(F.text.in_(["↩️ Назад", "🔙 Главное меню"]))
@@ -868,38 +981,35 @@ async def final_confirmation(message: types.Message, state: FSMContext):
     await state.update_data(last_activity=datetime.now().isoformat())
     data = await state.get_data()
     
-    try:
-        # Проверка обязательных полей
-        required_fields = ['selected_shop', 'article', 'order_reason', 'quantity', 'department']
-        for field in required_fields:
-            if field not in data:
-                raise ValueError(f"Отсутствует поле: {field}")
+    
+    # Проверка обязательных полей
+    required_fields = ['selected_shop', 'article', 'order_reason', 'quantity', 'department']
+    for field in required_fields:
+        if field not in data:
+            raise ValueError(f"Отсутствует поле: {field}")
         
         # Получаем лист отдела
-        department_sheet = orders_spreadsheet.worksheet(data['department'])
-        next_row = len(department_sheet.col_values(1)) + 1
+    department_sheet = orders_spreadsheet.worksheet(data['department'])
+    next_row = len(department_sheet.col_values(1)) + 1
         
         # Формируем обновления
-        updates = [
-            {'range': f'A{next_row}', 'values': [[data['selected_shop']]]},
-            {'range': f'B{next_row}', 'values': [[int(data['article'])]]},
-            {'range': f'C{next_row}', 'values': [[data['order_reason']]]},
-            {'range': f'D{next_row}', 'values': [[datetime.now().strftime("%d.%m.%Y %H:%M")]]},
-            {'range': f'E{next_row}', 'values': [[f"{data['user_name']}, {data['user_position']}"]]},
-            {'range': f'K{next_row}', 'values': [[int(data['quantity'])]]},
-            {'range': f'R{next_row}', 'values': [[int(message.from_user.id)]]}
-        ]
+    updates = [
+        {'range': f'A{next_row}', 'values': [[data['selected_shop']]]},
+        {'range': f'B{next_row}', 'values': [[int(data['article'])]]},
+        {'range': f'C{next_row}', 'values': [[data['order_reason']]]},
+        {'range': f'D{next_row}', 'values': [[datetime.now().strftime("%d.%m.%Y %H:%M")]]},
+        {'range': f'E{next_row}', 'values': [[f"{data['user_name']}, {data['user_position']}"]]},
+        {'range': f'K{next_row}', 'values': [[int(data['quantity'])]]},
+        {'range': f'R{next_row}', 'values': [[int(message.from_user.id)]]}
+    ]
 
-        # Записываем данные
-        department_sheet.batch_update(updates)
-        await message.answer("✅ Заказ успешно сохранен!", 
-                            reply_markup=main_menu_keyboard(message.from_user.id))
-        await log_user_activity(message.from_user.id, "Подтвердить заказ", "confirmation")
-        await state.clear()
+    # Записываем данные
+    department_sheet.batch_update(updates)
+    await message.answer("✅ Заказ успешно сохранен!", 
+    reply_markup=main_menu_keyboard(message.from_user.id))
+    await log_user_activity(message.from_user.id, "Подтвердить заказ", "confirmation")
+    await state.clear()
 
-    except Exception as e:
-        await log_error(message.from_user.id, f"Ошибка сохранения заказа: {str(e)}")
-        await message.answer(f"⚠️ Ошибка сохранения: {str(e)}")
 
 
 @dp.message(OrderStates.confirmation, F.text == "✏️ Исправить количество")
@@ -1185,8 +1295,9 @@ async def send_broadcast(content: dict, user_ids: list):
             failed += 1  # Пользователь заблокировал бота
         except Exception as e:
             failed += 1
-            errors.append(str(e))
             logging.error(f"Ошибка рассылки для {user_id}: {str(e)}")
+            if not isinstance(e, (TelegramBadRequest, TimeoutError)):
+                raise
     
     # Отправляем отчет администратору
     report = (
@@ -1274,6 +1385,9 @@ async def startup():
     try:  
         await preload_cache()
         asyncio.create_task(scheduled_cache_update())
+        
+        asyncio.create_task(state_cleanup_task())
+        
         logging.info("✅ Кэш загружен, задачи запущены")
     except Exception as e:
         logging.critical(f"🚨 Критическая ошибка запуска: {str(e)}")
@@ -1294,18 +1408,22 @@ async def main():
         await startup()
         logging.info("✅ Бот запущен в режиме поллинга")
         await dp.start_polling(bot, skip_updates=True)
+    except KeyboardInterrupt:
+        logging.info("🛑 Бот остановлен пользователем")
     except Exception as e:
-        logging.critical(f"🚨 Критическая ошибка: {str(e)}\n{traceback.format_exc()}")
-        # Попытка уведомить администраторов
+        # Ловим только критические ошибки запуска (не из обработчиков)
+        logging.critical(f"🚨 Критическая ошибка запуска: {str(e)}\n{traceback.format_exc()}")
+        # Уведомляем администраторов
         for admin_id in ADMINS:
             try:
                 await bot.send_message(
                     admin_id,
-                    f"🚨 Бот упал с ошибкой:\n{str(e)}\n\n{traceback.format_exc()[:3000]}"
+                    f"🚨 Бот упал при запуске:\n{str(e)}\n\n{traceback.format_exc()[:3000]}"
                 )
-            except:
+            except Exception:
                 pass
-        raise
+    finally:
+        await shutdown()
 
 if __name__ == "__main__":
     try:
