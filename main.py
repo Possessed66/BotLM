@@ -1255,7 +1255,7 @@ async def handle_admin_stats(message: types.Message):
 
 @dp.message(F.text == "📊 Дамп памяти")
 async def handle_memory_dump(message: types.Message):
-    """Генерация дампа памяти для анализа"""
+    """Генерация дампа памяти для анализа (текстовый вариант)"""
     if message.from_user.id not in ADMINS:
         return
     
@@ -1266,41 +1266,35 @@ async def handle_memory_dump(message: types.Message):
         report = []
         process = psutil.Process()
         mem_info = process.memory_info()
-        report.append(f"Memory RSS: {mem_info.rss / 1024 / 1024:.2f}MB")
-        report.append(f"Memory VMS: {mem_info.vms / 1024 / 1024:.2f}MB")
-        report.append("\nMost common types:")
         
+        # Основная информация
+        report.append(f"<b>📊 Отчет об использовании памяти</b>")
+        report.append(f"• Время: {datetime.now().strftime('%H:%M:%S')}")
+        report.append(f"• RSS: {mem_info.rss / 1024 / 1024:.2f} MB")
+        report.append(f"• VMS: {mem_info.vms / 1024 / 1024:.2f} MB")
+        
+        # Информация о процессах
+        report.append("\n<b>🔢 Процессная информация:</b>")
+        report.append(f"• Потоков: {process.num_threads()}")
+        report.append(f"• Дескрипторов: {process.num_fds()}")
+        
+        # Топ объектов в памяти
+        report.append("\n<b>📦 Топ объектов в памяти:</b>")
         common_types = objgraph.most_common_types(limit=15)
-        for obj_type, count in common_types:
-            report.append(f"  {obj_type}: {count}")
+        for i, (obj_type, count) in enumerate(common_types, 1):
+            report.append(f"{i}. {obj_type}: {count}")
         
-        # Собираем весь отчет в одну строку
-        report_str = "\n".join(report)
+        # Собираем полный отчет
+        full_report = "\n".join(report)
         
-        # Создаем буфер для текстового отчета и записываем в него закодированные байты
-        txt_buffer = BytesIO()
-        txt_buffer.write(report_str.encode('utf-8'))  # Кодируем строку в байты
-        txt_buffer.seek(0)  # Перемещаем указатель в начало
-        
-        # Генерация изображения в буфер
-        img_buffer = BytesIO()
-        objgraph.show_most_common_types(limit=15, file=img_buffer)
-        img_buffer.seek(0)
-        
-        # Отправляем отчеты
-        await message.answer_document(
-            BufferedInputFile(txt_buffer.getvalue(), filename="memory_report.txt"),
-            caption=f"Отчет о памяти ({datetime.now().strftime('%H:%M:%S')})"
-        )
-        
-        await message.answer_photo(
-            BufferedInputFile(img_buffer.getvalue(), filename="objects.png"),
-            caption="Распределение объектов в памяти"
-        )
-        
-        # Закрываем буферы
-        txt_buffer.close()
-        img_buffer.close()
+        # Разбиваем отчет на части по 4000 символов
+        for i in range(0, len(full_report), 4000):
+            part = full_report[i:i+4000]
+            await message.answer(
+                part,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True
+            )
         
         await wait_msg.delete()
         
