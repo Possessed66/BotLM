@@ -9,6 +9,9 @@ import logging
 import traceback
 import time
 import threading
+import tracemalloc
+import objgraph
+import psutil
 from pyzbar.pyzbar import decode
 from aiogram.exceptions import TelegramBadRequest
 from PIL import Image, ImageEnhance
@@ -29,7 +32,7 @@ from google.oauth2.service_account import Credentials
 import gspread
 from gspread.exceptions import APIError, SpreadsheetNotFound
 from cachetools import LRUCache
-import psutil
+
 
 
 # ===================== ГЛОБАЛЬНАЯ ОБРАБОТКА ОШИБОК =====================
@@ -116,6 +119,93 @@ async def global_error_handler(event: types.ErrorEvent, bot: Bot):
     
     return True
 
+
+
+# ===================== ПРОФИЛИРОВАНИЕ ПАМЯТИ =====================
+
+async def memory_monitor():
+    """Мониторинг использования памяти с расширенной диагностикой"""
+    # Включаем отслеживание распределения памяти
+    tracemalloc.start()
+    
+    # Счетчик для периодического сброса
+    cycle_count = 0
+    
+    while True:
+        try:
+            # Получаем текущее использование памяти
+            process = psutil.Process()
+            mem_info = process.memory_info()
+            
+            # Делаем снимок распределения памяти
+            snapshot = tracemalloc.take_snapshot()
+            top_stats = snapshot.statistics('lineno')
+            
+            # Логируем общую информацию
+            logging.info(
+                f"Memory usage: "
+                f"RSS={mem_info.rss / 1024 / 1024:.2f}MB, "
+                f"VMS={mem_info.vms / 1024 / 1024:.2f}MB"
+            )
+            
+            # Логируем топ-10 потребителей памяти
+            for stat in top_stats[:10]:
+                logging.info(
+                    f"Memory block: {stat.size / 1024:.2f}KB, "
+                    f"Count: {stat.count}, "
+                    f"File: {stat.traceback.format()[-1]}"
+                )
+            
+            # Периодический анализ объектов
+            cycle_count += 1
+            if cycle_count % 10 == 0:  # Каждые 10 циклов (60 минут)
+                # Анализ наиболее распространенных объектов
+                logging.info("Most common object types:")
+                for line in objgraph.most_common_types(limit=10):
+                    logging.info(f"  {line}")
+                
+                # Анализ роста объектов
+                logging.info("Objects growth since last check:")
+                growth = objgraph.get_growth(limit=10)
+                for line in growth:
+                    logging.info(f"  {line}")
+                
+                # Сброс счетчика
+                cycle_count = 0
+                gc.collect()
+            
+            # Пауза между проверками (6 минут)
+            await asyncio.sleep(360)
+                
+        except Exception as e:
+            logging.error(f"Ошибка в мониторе памяти: {str(e)}")
+            await asyncio.sleep(60)
+
+
+def profile_memory(func):
+    """Декоратор для профилирования памяти функции"""
+    def wrapper(*args, **kwargs):
+        # Запоминаем текущее распределение памяти
+        start_snapshot = tracemalloc.take_snapshot()
+        
+        # Выполняем функцию
+        result = func(*args, **kwargs)
+        
+        # Анализируем использование памяти
+        end_snapshot = tracemalloc.take_snapshot()
+        top_stats = end_snapshot.compare_to(start_snapshot, 'lineno')
+        
+        # Логируем результаты
+        logging.info(f"Memory profile for {func.__name__}:")
+        for stat in top_stats[:5]:
+            logging.info(
+                f"  {stat.size_diff / 1024:.2f}KB difference, "
+                f"Total: {stat.size / 1024:.2f}KB, "
+                f"File: {stat.traceback.format()[-1]}"
+            )
+        
+        return result
+    return wrapper
 
 # ===================== КОНФИГУРАЦИЯ =====================
 logging.basicConfig(
@@ -246,8 +336,8 @@ def confirm_keyboard() -> types.ReplyKeyboardMarkup:
 
 def admin_panel_keyboard() -> types.ReplyKeyboardMarkup:
     return create_keyboard(
-        ["📊 Статистика", "📢 Рассылка", "🔄 Обновить кэш", "🔧 Сервисный режим", "🔙 Главное меню"],
-        (2, 2, 1)
+        ["📊 Статистика", "📢 Рассылка", "🔄 Обновить кэш", "🔧 Сервисный режим", "📊 Дамп памяти", "🔙 Главное меню"],
+        (2, 2, 2)
     )
 
 def service_mode_keyboard() -> types.ReplyKeyboardMarkup:
@@ -495,6 +585,8 @@ async def process_barcode_image(photo: types.PhotoSize) -> Tuple[Optional[str], 
         del image_bytes
         gc.collect()
 
+
+@profile_memory
 async def get_product_info(article: str, shop: str) -> Optional[Dict[str, Any]]:
     """Получение информации о товаре"""
     try:
@@ -563,6 +655,8 @@ def get_supplier_dates_sheet(shop_number: str) -> list:
         logging.error(f"Ошибка получения данных поставщика: {str(e)}")
         return []
 
+
+@profile_memory
 async def preload_cache() -> None:
     """Предзагрузка кэша"""
     try:
@@ -819,6 +913,8 @@ async def process_article_manual(message: types.Message, state: FSMContext):
                         reply_markup=shop_selection_keyboard())
     await state.set_state(OrderStates.shop_selection)
 
+
+@profile_memory
 @dp.message(OrderStates.barcode_scan, F.photo)
 async def handle_barcode_scan(message: types.Message, state: FSMContext):
     """Обработка фото штрих-кода с улучшенной логикой"""
@@ -1139,6 +1235,64 @@ async def handle_admin_stats(message: types.Message):
 
 
 
+@dp.message(F.text == "📊 Дамп памяти")
+async def handle_memory_dump(message: types.Message):
+    """Генерация дампа памяти для анализа"""
+    if message.from_user.id not in ADMINS:
+        return
+    
+    # Уведомление о начале процесса
+    wait_msg = await message.answer("🔄 Формирование отчета о памяти...")
+    
+    try:
+        # Формируем текстовый отчет
+        report = []
+        process = psutil.Process()
+        mem_info = process.memory_info()
+        report.append(f"Memory RSS: {mem_info.rss / 1024 / 1024:.2f}MB")
+        report.append(f"Memory VMS: {mem_info.vms / 1024 / 1024:.2f}MB")
+        
+        # Топ объектов
+        report.append("\nMost common types:")
+        for obj_type, count in objgraph.most_common_types(limit=15):
+            report.append(f"  {obj_type}: {count}")
+        
+        # Сохраняем в файл
+        with open("memory_report.txt", "w") as f:
+            f.write("\n".join(report))
+        
+        # Генерация графа объектов
+        img_path = "objects.png"
+        objgraph.show_most_common_types(
+            limit=15, 
+            filename=img_path
+        )
+        
+        # Отправляем администратору
+        with open("memory_report.txt", "rb") as txt_file:
+            await message.answer_document(
+                txt_file, 
+                caption=f"Отчет о памяти ({datetime.now().strftime('%H:%M:%S')})"
+            )
+        
+        with open(img_path, "rb") as img_file:
+            await message.answer_photo(
+                img_file, 
+                caption="Распределение объектов в памяти"
+            )
+        
+        # Удаляем временные файлы
+        os.remove("memory_report.txt")
+        os.remove(img_path)
+        
+        await wait_msg.delete()
+        
+    except Exception as e:
+        logging.error(f"Ошибка при создании дампа памяти: {str(e)}")
+        await message.answer(f"❌ Ошибка: {str(e)}")
+        with suppress(Exception):
+            await wait_msg.delete()
+
 ##===============РАССЫЛКА=================
 
 @dp.message(F.text == "📢 Рассылка")
@@ -1385,7 +1539,7 @@ async def startup():
     try:  
         await preload_cache()
         asyncio.create_task(scheduled_cache_update())
-        
+        asyncio.create_task(memory_monitor())
         asyncio.create_task(state_cleanup_task())
         
         logging.info("✅ Кэш загружен, задачи запущены")
