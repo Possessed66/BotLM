@@ -123,10 +123,20 @@ async def global_error_handler(event: types.ErrorEvent, bot: Bot):
 
 # ===================== ПРОФИЛИРОВАНИЕ ПАМЯТИ =====================
 
+def init_tracemalloc():
+    """Безопасная инициализация трассировки памяти"""
+    if not tracemalloc.is_tracing():
+        tracemalloc.start()
+        logging.info("Tracemalloc initialized")
+
+
+
+
 async def memory_monitor():
     """Мониторинг использования памяти с расширенной диагностикой"""
     # Включаем отслеживание распределения памяти
-    tracemalloc.start()
+    if not tracemalloc.is_tracing():
+        tracemalloc.start()
     
     # Счетчик для периодического сброса
     cycle_count = 0
@@ -185,6 +195,10 @@ async def memory_monitor():
 def profile_memory(func):
     """Декоратор для профилирования памяти функции"""
     def wrapper(*args, **kwargs):
+        # Проверяем и инициализируем tracemalloc при необходимости
+        if not tracemalloc.is_tracing():
+            tracemalloc.start()
+        
         # Запоминаем текущее распределение памяти
         start_snapshot = tracemalloc.take_snapshot()
         
@@ -694,6 +708,9 @@ async def preload_cache() -> None:
                 barcodes_index[barcode] = article
         
         cache["barcodes_index"] = pickle.dumps(barcodes_index)
+
+        cache_size = sum(len(pickle.dumps(v)) for v in cache.values()) / 1024 / 1024
+        logging.info(f"✅ Кэш загружен. Размер: {cache_size:.2f} MB")
         
         logging.info("✅ Кэш успешно загружен")
     except Exception as e:
@@ -1535,11 +1552,12 @@ async def scheduled_cache_update():
 
 async def startup():
     """Инициализация при запуске"""
+    init_tracemalloc()
     logging.info("🟢 Бот запускается...")
     try:  
+        asyncio.create_task(memory_monitor())
         await preload_cache()
         asyncio.create_task(scheduled_cache_update())
-        asyncio.create_task(memory_monitor())
         asyncio.create_task(state_cleanup_task())
         
         logging.info("✅ Кэш загружен, задачи запущены")
