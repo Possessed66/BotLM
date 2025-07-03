@@ -169,7 +169,7 @@ async def memory_monitor():
             
             # Периодический анализ объектов
             cycle_count += 1
-            if cycle_count % 10 == 0:  # Каждые 10 циклов (60 минут)
+            if cycle_count % 10 == 0:  # Каждые 10 циклов (200 минут)
                 # Анализ наиболее распространенных объектов
                 logging.info("Most common object types:")
                 for line in objgraph.most_common_types(limit=10):
@@ -185,8 +185,8 @@ async def memory_monitor():
                 cycle_count = 0
                 gc.collect()
             
-            # Пауза между проверками (6 минут)
-            await asyncio.sleep(360)
+            # Пауза между проверками (20 минут)
+            await asyncio.sleep(1200)
                 
         except Exception as e:
             logging.error(f"Ошибка в мониторе памяти: {str(e)}")
