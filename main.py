@@ -1274,10 +1274,13 @@ async def handle_memory_dump(message: types.Message):
         for obj_type, count in common_types:
             report.append(f"  {obj_type}: {count}")
         
-        # Сохраняем текстовый отчет в буфер
+        # Собираем весь отчет в одну строку
+        report_str = "\n".join(report)
+        
+        # Создаем буфер для текстового отчета и записываем в него закодированные байты
         txt_buffer = BytesIO()
-        txt_buffer.write("\n".join(report).encode())
-        txt_buffer.seek(0)
+        txt_buffer.write(report_str.encode('utf-8'))  # Кодируем строку в байты
+        txt_buffer.seek(0)  # Перемещаем указатель в начало
         
         # Генерация изображения в буфер
         img_buffer = BytesIO()
@@ -1286,12 +1289,12 @@ async def handle_memory_dump(message: types.Message):
         
         # Отправляем отчеты
         await message.answer_document(
-            types.BufferedInputFile(txt_buffer.read(), filename="memory_report.txt"),
+            BufferedInputFile(txt_buffer.getvalue(), filename="memory_report.txt"),
             caption=f"Отчет о памяти ({datetime.now().strftime('%H:%M:%S')})"
         )
         
         await message.answer_photo(
-            types.BufferedInputFile(img_buffer.read(), filename="objects.png"),
+            BufferedInputFile(img_buffer.getvalue(), filename="objects.png"),
             caption="Распределение объектов в памяти"
         )
         
