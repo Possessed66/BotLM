@@ -135,61 +135,67 @@ def init_tracemalloc():
 
 async def memory_monitor():
     """Мониторинг использования памяти с расширенной диагностикой"""
-    # Включаем отслеживание распределения памяти
     if not tracemalloc.is_tracing():
-        tracemalloc.start()
+        tracemalloc.start(10)  # Ограничиваем глубину трассировки
     
-    # Счетчик для периодического сброса
     cycle_count = 0
+    prev_snapshot = None
     
     while True:
         try:
-            # Получаем текущее использование памяти
             process = psutil.Process()
             mem_info = process.memory_info()
             
-            # Делаем снимок распределения памяти
-            snapshot = tracemalloc.take_snapshot()
-            top_stats = snapshot.statistics('lineno')
-            
-            # Логируем общую информацию
+            # Логируем общее использование
             logging.info(
-                f"Memory usage: "
-                f"RSS={mem_info.rss / 1024 / 1024:.2f}MB, "
+                f"Memory: RSS={mem_info.rss / 1024 / 1024:.2f}MB, "
                 f"VMS={mem_info.vms / 1024 / 1024:.2f}MB"
             )
             
-            # Логируем топ-10 потребителей памяти
-            for stat in top_stats[:10]:
+            # Создаем снимок памяти
+            snapshot = tracemalloc.take_snapshot()
+            
+            # Анализируем распределение памяти
+            top_stats = snapshot.statistics('lineno')[:5]
+            for i, stat in enumerate(top_stats):
                 logging.info(
-                    f"Memory block: {stat.size / 1024:.2f}KB, "
-                    f"Count: {stat.count}, "
-                    f"File: {stat.traceback.format()[-1]}"
+                    f"Alloc {i+1}: {stat.size / 1024:.2f}KB in {stat.count} blocks "
+                    f"at {stat.traceback.format()[-1]}"
                 )
             
-            # Периодический анализ объектов
+            # Периодический углубленный анализ
             cycle_count += 1
-            if cycle_count % 10 == 0:  # Каждые 10 циклов (200 минут)
-                # Анализ наиболее распространенных объектов
+            if cycle_count >= 10:  # Каждые 60 минут
+                # Анализ типов объектов
                 logging.info("Most common object types:")
-                for line in objgraph.most_common_types(limit=10):
-                    logging.info(f"  {line}")
+                common_types = objgraph.most_common_types(limit=10)
+                for obj_type, count in common_types:
+                    logging.info(f"  {obj_type}: {count}")
                 
-                # Анализ роста объектов
-                logging.info("Objects growth since last check:")
-                growth = objgraph.get_growth(limit=10)
-                for line in growth:
-                    logging.info(f"  {line}")
+                # Анализ роста памяти
+                if prev_snapshot:
+                    diff_stats = snapshot.compare_to(prev_snapshot, 'lineno')
+                    growth_stats = [stat for stat in diff_stats if stat.size_diff > 0][:5]
+                    
+                    if growth_stats:
+                        logging.info("Top memory growth:")
+                        for stat in growth_stats:
+                            logging.info(
+                                f"  +{stat.size_diff / 1024:.2f}KB: "
+                                f"{stat.traceback.format()[-1]}"
+                            )
+                    else:
+                        logging.info("No significant memory growth detected")
                 
                 # Сброс счетчика
                 cycle_count = 0
+                prev_snapshot = snapshot
                 gc.collect()
             
-            # Пауза между проверками (20 минут)
-            await asyncio.sleep(1200)
-                
+            await asyncio.sleep(1200)  # 20 минут
+            
         except Exception as e:
-            logging.error(f"Ошибка в мониторе памяти: {str(e)}")
+            logging.error(f"Memory monitor error: {str(e)}")
             await asyncio.sleep(60)
 
 
