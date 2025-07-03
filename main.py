@@ -1,7 +1,7 @@
 import os
 import json
 import pickle
-import io
+import io 
 import re
 import gc
 import asyncio
@@ -13,6 +13,7 @@ import tracemalloc
 import objgraph
 import psutil
 from pyzbar.pyzbar import decode
+from io import BytesIO
 from aiogram.exceptions import TelegramBadRequest
 from PIL import Image, ImageEnhance
 from concurrent.futures import ThreadPoolExecutor
@@ -24,7 +25,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.enums import ParseMode
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
-from aiogram.types import ReplyKeyboardRemove, File
+from aiogram.types import ReplyKeyboardRemove, File, BufferedInputFile
 from aiogram.exceptions import TelegramForbiddenError
 from aiogram.filters import Command
 from contextlib import suppress
@@ -1258,7 +1259,6 @@ async def handle_memory_dump(message: types.Message):
     if message.from_user.id not in ADMINS:
         return
     
-    # Уведомление о начале процесса
     wait_msg = await message.answer("🔄 Формирование отчета о памяти...")
     
     try:
@@ -1268,39 +1268,36 @@ async def handle_memory_dump(message: types.Message):
         mem_info = process.memory_info()
         report.append(f"Memory RSS: {mem_info.rss / 1024 / 1024:.2f}MB")
         report.append(f"Memory VMS: {mem_info.vms / 1024 / 1024:.2f}MB")
-        
-        # Топ объектов
         report.append("\nMost common types:")
-        for obj_type, count in objgraph.most_common_types(limit=15):
+        
+        common_types = objgraph.most_common_types(limit=15)
+        for obj_type, count in common_types:
             report.append(f"  {obj_type}: {count}")
         
-        # Сохраняем в файл
-        with open("memory_report.txt", "w") as f:
-            f.write("\n".join(report))
+        # Сохраняем текстовый отчет в буфер
+        txt_buffer = BytesIO()
+        txt_buffer.write("\n".join(report).encode())
+        txt_buffer.seek(0)
         
-        # Генерация графа объектов
-        img_path = "objects.png"
-        objgraph.show_most_common_types(
-            limit=15, 
-            filename=img_path
+        # Генерация изображения в буфер
+        img_buffer = BytesIO()
+        objgraph.show_most_common_types(limit=15, file=img_buffer)
+        img_buffer.seek(0)
+        
+        # Отправляем отчеты
+        await message.answer_document(
+            types.BufferedInputFile(txt_buffer.read(), filename="memory_report.txt"),
+            caption=f"Отчет о памяти ({datetime.now().strftime('%H:%M:%S')})"
         )
         
-        # Отправляем администратору
-        with open("memory_report.txt", "rb") as txt_file:
-            await message.answer_document(
-                txt_file, 
-                caption=f"Отчет о памяти ({datetime.now().strftime('%H:%M:%S')})"
-            )
+        await message.answer_photo(
+            types.BufferedInputFile(img_buffer.read(), filename="objects.png"),
+            caption="Распределение объектов в памяти"
+        )
         
-        with open(img_path, "rb") as img_file:
-            await message.answer_photo(
-                img_file, 
-                caption="Распределение объектов в памяти"
-            )
-        
-        # Удаляем временные файлы
-        os.remove("memory_report.txt")
-        os.remove(img_path)
+        # Закрываем буферы
+        txt_buffer.close()
+        img_buffer.close()
         
         await wait_msg.delete()
         
@@ -1309,6 +1306,7 @@ async def handle_memory_dump(message: types.Message):
         await message.answer(f"❌ Ошибка: {str(e)}")
         with suppress(Exception):
             await wait_msg.delete()
+
 
 ##===============РАССЫЛКА=================
 
