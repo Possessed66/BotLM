@@ -229,7 +229,7 @@ logging.basicConfig(
 )
 
 # Сервисный режим
-SERVICE_MODE = True
+SERVICE_MODE = False
 ADMINS = [122086799, 5183727015]
 
 # Кэширование
@@ -737,15 +737,21 @@ async def activity_tracker_middleware(handler, event, data):
     """Улучшенный трекинг активности пользователя"""
     state = data.get('state')
     if state:
-        # Инициализируем last_activity при создании состояния
-        state_data = await state.get_data()
-        if 'last_activity' not in state_data:
-            await state.update_data(last_activity=datetime.now().isoformat())
-        
-        # Обновляем активность ПОСЛЕ обработки сообщения
-        response = await handler(event, data)
-        await state.update_data(last_activity=datetime.now().isoformat())
-        return response
+        try:
+            # Получаем текущие данные состояния
+            state_data = await state.get_data()
+            
+            # Обновляем активность ПОСЛЕ обработки сообщения
+            response = await handler(event, data)
+            
+            # Обновляем время активности
+            state_data['last_activity'] = datetime.now().isoformat()
+            await state.set_data(state_data)
+            
+            return response
+        except Exception as e:
+            logging.error(f"Ошибка в трекере активности: {str(e)}")
+            return await handler(event, data)
     
     return await handler(event, data)
 
@@ -757,41 +763,43 @@ async def state_cleanup_task():
         try:
             now = datetime.now()
             cleared_count = 0
-            total_states = 0
             
-            # Получаем все активные состояния
-            states = dp.storage.storage
-            
-            for key, state_data in states.items():
-                total_states += 1
-                data = state_data.get('data', {})
-                last_activity_str = data.get('last_activity')
+            # Для MemoryStorage
+            if hasattr(dp.storage, 'storage'):
+                states = dp.storage.storage
                 
-                if not last_activity_str:
-                    continue
+                for key, state_record in list(states.items()):  # Используем list для безопасной итерации
+                    # Проверяем наличие необходимых атрибутов
+                    if not hasattr(state_record, 'data') or not isinstance(state_record.data, dict):
+                        continue
+                    
+                    data = state_record.data
+                    last_activity_str = data.get('last_activity')
+                    
+                    if not last_activity_str:
+                        continue
+                    
+                    try:
+                        last_activity = datetime.fromisoformat(last_activity_str)
+                    except (TypeError, ValueError):
+                        continue
+                    
+                    # Проверяем таймаут (30 минут)
+                    if (now - last_activity) > timedelta(minutes=30):
+                        await dp.storage.set_state(key=key, state=None)
+                        await dp.storage.set_data(key=key, data={})
+                        del states[key]  # Явное удаление записи
+                        cleared_count += 1
                 
-                # Преобразуем строку в datetime
-                try:
-                    last_activity = datetime.fromisoformat(last_activity_str)
-                except (TypeError, ValueError):
-                    continue
-                
-                # Проверяем таймаут (30 минут)
-                if (now - last_activity) > timedelta(minutes=30):
-                    await dp.storage.set_state(key=key, state=None)
-                    await dp.storage.set_data(key=key, data={})
-                    cleared_count += 1
-            
-            # Логируем результат очистки
-            if cleared_count > 0:
-                logging.info(f"Автоочистка: очищено {cleared_count}/{total_states} состояний")
+                if cleared_count > 0:
+                    logging.info(f"Автоочистка: очищено {cleared_count} состояний")
             
             # Пауза между проверками (15 минут)
-            await asyncio.sleep(900)
+            await asyncio.sleep(1200)
                 
         except Exception as e:
             logging.error(f"Ошибка в задаче очистки состояний: {str(e)}")
-            await asyncio.sleep(300)  # Пауза при ошибке
+            await asyncio.sleep(300)
 
 
 # ===================== ОБРАБОТЧИКИ КОМАНД =====================
