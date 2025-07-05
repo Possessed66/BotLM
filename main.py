@@ -399,31 +399,40 @@ async def toggle_service_mode(enable: bool) -> None:
     await notify_admins(f"🛠 Сервисный режим {status}")
 
 async def get_user_data(user_id: str) -> Optional[Dict[str, Any]]:
-    """Получение данных пользователя с кэшированием"""
-    cache_key = f"user_{user_id}"
-    if cache_key in cache:
-        return cache[cache_key]
-    
+    """Получение данных пользователя с улучшенной обработкой ошибок"""
     try:
-        users_data = pickle.loads(cache.get("users_data", b""))
-        if not users_data:
-            users_data = users_sheet.get_all_records()
-            cache["users_data"] = pickle.dumps(users_data)
+        cache_key = f"user_{user_id}"
+        if cache_key in cache:
+            user_data = cache[cache_key]
+            # Проверяем наличие обязательных полей
+            if all(key in user_data for key in ['shop', 'name', 'position']):
+                return user_data
+            else:
+                # Если данные неполные, запрашиваем заново
+                cache.pop(cache_key, None)
         
-        for user in users_data:
+        # Загрузка данных из Google Sheets
+        users_records = pickle.loads(cache.get("users_data", b""))
+        if not users_records:
+            users_records = users_sheet.get_all_records()
+            cache["users_data"] = pickle.dumps(users_records)
+        
+        for user in users_records:
             if str(user.get("ID пользователя", "")).strip() == str(user_id).strip():
                 user_data = {
-                    'shop': user.get("Номер магазина", ""),
-                    'name': user.get("Имя", ""),
-                    'surname': user.get("Фамилия", ""),
-                    'position': user.get("Должность", "")
+                    'shop': user.get("Номер магазина", "") or "Не указан",
+                    'name': user.get("Имя", "") or "Не указано",
+                    'surname': user.get("Фамилия", "") or "Не указано",
+                    'position': user.get("Должность", "") or "Не указана"
                 }
                 cache[cache_key] = user_data
                 return user_data
+        
         return None
     except Exception as e:
         logging.error(f"Ошибка получения данных пользователя: {str(e)}")
         return None
+
 
 async def log_error(user_id: str, error: str) -> None:
     """Логирование ошибок"""
@@ -740,26 +749,28 @@ async def service_mode_middleware(handler, event, data):
 
 @dp.update.middleware()
 async def activity_tracker_middleware(handler, event, data):
-    """Улучшенный трекинг активности пользователя"""
-    state = data.get('state')
-    if state:
-        try:
-            # Получаем текущие данные состояния
+    """Улучшенный трекинг активности пользователя с обработкой ошибок"""
+    try:
+        state = data.get('state')
+        if state:
+            # Получаем данные состояния
             state_data = await state.get_data()
             
             # Обновляем активность ПОСЛЕ обработки сообщения
             response = await handler(event, data)
             
             # Обновляем время активности
-            state_data['last_activity'] = datetime.now().isoformat()
-            await state.set_data(state_data)
+            new_data = await state.get_data()
+            new_data['last_activity'] = datetime.now().isoformat()
+            await state.set_data(new_data)
             
             return response
-        except Exception as e:
-            logging.error(f"Ошибка в трекере активности: {str(e)}")
-            return await handler(event, data)
-    
-    return await handler(event, data)
+        
+        return await handler(event, data)
+        
+    except Exception as e:
+        logging.error(f"Ошибка в трекере активности: {str(e)}")
+        return await handler(event, data)
 
 
 # ===================== АВТОМАТИЧЕСКАЯ ОЧИСТКА СОСТОЯНИЙ =====================
@@ -1151,66 +1162,111 @@ async def correct_quantity(message: types.Message, state: FSMContext):
 # Запрос информации о товаре
 @dp.message(F.text == "📋 Запрос информации")
 async def handle_info_request(message: types.Message, state: FSMContext):
-    """Обработчик запроса информации"""
-    await state.update_data(last_activity=datetime.now().isoformat())
-    await log_user_activity(message.from_user.id, "Запрос информации", "info")
-    
-    user_data = await get_user_data(str(message.from_user.id))
-    if not user_data:
-        await message.answer("❌ Сначала пройдите регистрацию через /start")
-        return
+    """Обработчик запроса информации с защитой от потери данных"""
+    try:
+        await state.update_data(last_activity=datetime.now().isoformat())
+        await log_user_activity(message.from_user.id, "Запрос информации", "info")
         
-    await state.update_data(shop=user_data['shop'])
-    await message.answer("🔢 Введите артикул товара:",reply_markup=cancel_keyboard())
-    await state.set_state(InfoRequest.article_input)
+        # Получаем данные пользователя
+        user_data = await get_user_data(str(message.from_user.id))
+        if not user_data:
+            await message.answer("❌ Сначала пройдите регистрацию через /start")
+            return
+        
+        # Проверяем наличие магазина в профиле
+        shop = user_data.get('shop', 'Не указан')
+        if shop == "Не указан":
+            await message.answer("❌ В вашем профиле не указан магазин. Обратитесь к администратору.")
+            return
+        
+        # Сохраняем магазин в состоянии
+        await state.set_data({
+            'shop': shop,
+            'last_activity': datetime.now().isoformat()
+        })
+        
+        await message.answer("🔢 Введите артикул товара:", reply_markup=cancel_keyboard())
+        await state.set_state(InfoRequest.article_input)
+        
+    except Exception as e:
+        logging.error(f"Ошибка в начале запроса информации: {str(e)}")
+        await message.answer("⚠️ Произошла ошибка. Попробуйте позже.")
+        await state.clear()
 
 
 @dp.message(InfoRequest.article_input)
 async def process_info_request(message: types.Message, state: FSMContext):
-    """Обработка запроса информации о товаре"""
-    # Обработка фото
-    if message.photo:
-        photo = message.photo[-1]
-        article, error = await process_barcode_image(photo)
+    """Обработка запроса информации о товаре с дополнительной защитой"""
+    try:
+        # Получаем данные состояния
+        data = await state.get_data()
+        user_id = str(message.from_user.id)
         
-        if error:
-            await message.answer(error)
+        # Проверяем наличие магазина в данных состояния
+        if 'shop' not in data:
+            # Если нет в состоянии, пробуем получить из профиля
+            user_data = await get_user_data(user_id)
+            if not user_data:
+                await message.answer("❌ Ваш профиль не найден. Пройдите регистрацию через /start")
+                await state.clear()
+                return
+                
+            shop = user_data.get('shop', 'Не указан')
+            if shop == "Не указан":
+                await message.answer("❌ В вашем профиле не указан магазин. Обратитесь к администратору.")
+                await state.clear()
+                return
+        else:
+            shop = data['shop']
+        
+        # Обработка ввода
+        article = None
+        if message.photo:
+            # Обработка фото
+            photo = message.photo[-1]
+            article, error = await process_barcode_image(photo)
+            if error:
+                await message.answer(error)
+                return
+        else:
+            # Обработка текста
+            article = message.text.strip()
+            if not re.match(r'^\d{4,10}$', article):
+                await message.answer("❌ Неверный формат артикула.")
+                return
+        
+        # Поиск информации о товаре
+        await message.answer("🔄 Поиск информации о товаре...")
+        product_info = await get_product_info(article, shop)
+        
+        if not product_info:
+            await message.answer("❌ Товар не найден")
+            await state.clear()
             return
-    else:
-        # Обработка текста
-        article = message.text.strip()
-        if not re.match(r'^\d{4,10}$', article):
-            await message.answer("❌ Неверный формат артикула.")
-            return
-    
-    data = await state.get_data()
-    user_shop = data['shop']
-    product_info = await get_product_info(article, user_shop)
-    
-    if not product_info:
-        await message.answer("❌ Товар не найден")
-        await state.clear()
-        return
 
-    # Формируем основной ответ
-    response = (
-        f"🔍 Информация о товаре:\n"
-        f"Магазин: {user_shop}\n"
-        f"📦 Артикул: {product_info['Артикул']}\n"
-        f"🏷️ Название: {product_info['Название']}\n"
-        f"🔢 Отдел: {product_info['Отдел']}\n"
-        f"📅 Ближайшая дата заказа: {product_info['Дата заказа']}\n"
-        f"🚚 Ожидаемая дата поставки: {product_info['Дата поставки']}\n"
-        f"🏭 Поставщик: {product_info['Поставщик']}" 
-    )
-    
-    # ДОБАВЛЕНО: Проверка и добавление предупреждения для ТОП 0
-    top_in_shop = product_info.get('Топ в магазине', '0')
-    if top_in_shop == '0':
-        response += "\n\n⚠️ <b>ВНИМАНИЕ: Артикул в ТОП 0!</b>\nСвяжись с менеджером для уточнения информации"
-    
-    await message.answer(response, reply_markup=main_menu_keyboard(message.from_user.id))
-    await state.clear()
+        # Формирование ответа
+        response = (
+            f"🔍 Информация о товаре:\n"
+            f"Магазин: {shop}\n"
+            f"📦 Артикул: {product_info['Артикул']}\n"
+            f"🏷️ Название: {product_info['Название']}\n"
+            f"🔢 Отдел: {product_info['Отдел']}\n"
+            f"📅 Ближайшая дата заказа: {product_info['Дата заказа']}\n"
+            f"🚚 Ожидаемая дата поставки: {product_info['Дата поставки']}\n"
+            f"🏭 Поставщик: {product_info['Поставщик']}" 
+        )
+        
+        # Добавляем предупреждение для ТОП 0
+        if product_info.get('Топ в магазине', '0') == '0':
+            response += "\n\n⚠️ <b>ВНИМАНИЕ: Артикул в ТОП 0!</b>\nСвяжитесь с менеджером для уточнения информации"
+        
+        await message.answer(response, reply_markup=main_menu_keyboard(message.from_user.id))
+        await state.clear()
+        
+    except Exception as e:
+        logging.error(f"Ошибка в обработчике информации: {str(e)}")
+        await message.answer("⚠️ Произошла ошибка при обработке запроса. Попробуйте позже.")
+        await state.clear()
 
 
 
