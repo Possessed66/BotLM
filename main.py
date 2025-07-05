@@ -618,56 +618,89 @@ async def process_barcode_image(photo: types.PhotoSize) -> Tuple[Optional[str], 
 
 @profile_memory
 async def get_product_info(article: str, shop: str) -> Optional[Dict[str, Any]]:
-    """Получение информации о товаре"""
+    """Получение информации о товаре с расширенным логированием"""
     try:
-        gamma_index = pickle.loads(cache.get("gamma_index", b""))
-        key = (str(article).strip(), str(shop).strip())
-        product_data = gamma_index.get(key)
-
-        top_in_shop = product_data.get("Топ в магазине", "0").strip()
+        logging.info(f"🔍 Поиск товара: артикул={article}, магазин={shop}")
         
-        if not product_data:
+        # Проверяем кэш gamma_index
+        if "gamma_index" not in cache:
+            logging.error("❌ gamma_index отсутствует в кэше!")
             return None
         
+        try:
+            gamma_index = pickle.loads(cache["gamma_index"])
+            logging.info(f"Размер gamma_index: {len(gamma_index)} записей")
+        except Exception as e:
+            logging.error(f"Ошибка загрузки gamma_index: {str(e)}")
+            return None
+        
+        # Формируем ключ для поиска
+        lookup_key = (str(article).strip(), str(shop).strip())
+        logging.info(f"Ключ поиска: {lookup_key}")
+        
+        # Поиск в индексе
+        product_data = gamma_index.get(lookup_key)
+        
+        if not product_data:
+            logging.warning(f"Товар не найден по ключу: {lookup_key}")
+            # Попробуем найти без магазина (только по артикулу)
+            found = False
+            for key, data in gamma_index.items():
+                if key[0] == lookup_key[0]:
+                    logging.info(f"Найден альтернативный магазин: {key[1]} - {data['Название']}")
+                    found = True
+            if not found:
+                logging.warning("Товар не найден даже без привязки к магазину")
+            return None
+        
+        logging.info(f"Найден товар: {product_data['Название']}")
+        
+        # Получаем данные поставщика
         supplier_id = str(product_data.get("Номер осн. пост.", "")).strip()
+        logging.info(f"ID поставщика: {supplier_id}")
+        
         supplier_list = get_supplier_dates_sheet(shop)
+        logging.info(f"Получено {len(supplier_list)} поставщиков для магазина {shop}")
         
         # Поиск поставщика
-        supplier_data = next(
-            (item for item in supplier_list 
-             if str(item.get("Номер осн. пост.", "")).strip() == supplier_id),
-            None
-        )
+        supplier_data = None
+        for item in supplier_list:
+            if str(item.get("Номер осн. пост.", "")).strip() == supplier_id:
+                supplier_data = item
+                break
         
         if not supplier_data:
+            logging.info("Поставщик не найден, используется резервная информация")
             return {
                 'Артикул': article,
                 'Название': product_data.get('Название', ''),
                 'Отдел': str(product_data.get('Отдел', '')),
                 'Магазин': shop,
                 'Поставщик': 'Товар РЦ',
-                'Топ в магазине': top_in_shop
+                'Топ в магазине': product_data.get('Топ в магазине', '0')
             }
         
         # Парсинг данных поставщика
-        supplier_name = supplier_data.get("Название осн. пост.", "Не указано").strip()
         parsed_supplier = parse_supplier_data(supplier_data)
         order_date, delivery_date = calculate_delivery_date(parsed_supplier)
         
-        return {
+        result = {
             'Артикул': article,
             'Название': product_data.get('Название', ''),
             'Отдел': str(product_data.get('Отдел', '')),
             'Магазин': shop,
-            'Поставщик': supplier_name,
+            'Поставщик': supplier_data.get("Название осн. пост.", "Не указано").strip(),
             'Дата заказа': order_date,
             'Дата поставки': delivery_date,
             'Номер поставщика': supplier_id,
-            'Топ в магазине': top_in_shop
+            'Топ в магазине': product_data.get('Топ в магазине', '0')
         }
+        
+        logging.info(f"Успешно получена информация: {result}")
+        return result
     
     except Exception as e:
-        logging.error(f"Ошибка получения информации о товаре: {str(e)}")
+        logging.exception(f"Критическая ошибка в get_product_info: {str(e)}")
         return None
 
 def get_supplier_dates_sheet(shop_number: str) -> list:
@@ -775,18 +808,17 @@ async def activity_tracker_middleware(handler, event, data):
 
 # ===================== АВТОМАТИЧЕСКАЯ ОЧИСТКА СОСТОЯНИЙ =====================
 async def state_cleanup_task():
-    """Фоновая задача для очистки устаревших состояний"""
+    """Фоновая задача для очистки устаревших состояний с логированием"""
     while True:
         try:
             now = datetime.now()
             cleared_count = 0
             
-            # Для MemoryStorage
             if hasattr(dp.storage, 'storage'):
                 states = dp.storage.storage
+                logging.info(f"Проверка состояний: {len(states)} активных сессий")
                 
-                for key, state_record in list(states.items()):  # Используем list для безопасной итерации
-                    # Проверяем наличие необходимых атрибутов
+                for key, state_record in list(states.items()):
                     if not hasattr(state_record, 'data') or not isinstance(state_record.data, dict):
                         continue
                     
@@ -798,24 +830,26 @@ async def state_cleanup_task():
                     
                     try:
                         last_activity = datetime.fromisoformat(last_activity_str)
-                    except (TypeError, ValueError):
-                        continue
-                    
-                    # Проверяем таймаут (30 минут)
-                    if (now - last_activity) > timedelta(minutes=30):
-                        await dp.storage.set_state(key=key, state=None)
-                        await dp.storage.set_data(key=key, data={})
-                        del states[key]  # Явное удаление записи
-                        cleared_count += 1
+                        inactivity = (now - last_activity).total_seconds() / 60
+                        
+                        if inactivity > 30:
+                            user_id = key.user_id
+                            logging.info(f"Очистка состояния: пользователь {user_id}, неактивен {inactivity:.1f} мин")
+                            await dp.storage.set_state(key=key, state=None)
+                            await dp.storage.set_data(key=key, data={})
+                            del states[key]
+                            cleared_count += 1
+                            
+                    except (TypeError, ValueError) as e:
+                        logging.error(f"Ошибка формата времени: {str(e)}")
                 
                 if cleared_count > 0:
                     logging.info(f"Автоочистка: очищено {cleared_count} состояний")
             
-            # Пауза между проверками (15 минут)
-            await asyncio.sleep(1200)
+            await asyncio.sleep(900)
                 
         except Exception as e:
-            logging.error(f"Ошибка в задаче очистки состояний: {str(e)}")
+            logging.exception(f"Ошибка в задаче очистки состояний: {str(e)}")
             await asyncio.sleep(300)
 
 
@@ -1204,24 +1238,37 @@ async def process_info_request(message: types.Message, state: FSMContext):
         
         # Проверяем наличие магазина в данных состояния
         if 'shop' not in data:
+            # Логируем предупреждение
+            logging.warning(f"Магазин отсутствует в состоянии для {user_id}")
+            
             # Если нет в состоянии, пробуем получить из профиля
             user_data = await get_user_data(user_id)
             if not user_data:
+                logging.warning(f"Профиль не найден для {user_id}")
                 await message.answer("❌ Ваш профиль не найден. Пройдите регистрацию через /start")
                 await state.clear()
                 return
                 
             shop = user_data.get('shop', 'Не указан')
             if shop == "Не указан":
+                logging.warning(f"Магазин не указан в профиле для {user_id}")
                 await message.answer("❌ В вашем профиле не указан магазин. Обратитесь к администратору.")
                 await state.clear()
                 return
+            else:
+                # Обновляем состояние
+                await state.update_data(shop=shop)
+                logging.info(f"Магазин {shop} восстановлен из профиля для {user_id}")
         else:
             shop = data['shop']
+            logging.info(f"Используется магазин {shop} из состояния для {user_id}")
         
         # Обработка ввода
         article = None
         if message.photo:
+            # Логирование попытки обработки фото
+            logging.info(f"Обработка фото для запроса информации (пользователь: {user_id})")
+            
             # Обработка фото
             photo = message.photo[-1]
             article, error = await process_barcode_image(photo)
@@ -1229,6 +1276,9 @@ async def process_info_request(message: types.Message, state: FSMContext):
                 await message.answer(error)
                 return
         else:
+            # Логирование ручного ввода
+            logging.info(f"Ручной ввод артикула: {message.text} (пользователь: {user_id})")
+            
             # Обработка текста
             article = message.text.strip()
             if not re.match(r'^\d{4,10}$', article):
@@ -1236,10 +1286,12 @@ async def process_info_request(message: types.Message, state: FSMContext):
                 return
         
         # Поиск информации о товаре
+        logging.info(f"Поиск информации о товаре {article} для магазина {shop} (пользователь: {user_id})")
         await message.answer("🔄 Поиск информации о товаре...")
         product_info = await get_product_info(article, shop)
         
         if not product_info:
+            logging.warning(f"Товар {article} не найден для магазина {shop} (пользователь: {user_id})")
             await message.answer("❌ Товар не найден")
             await state.clear()
             return
@@ -1262,6 +1314,9 @@ async def process_info_request(message: types.Message, state: FSMContext):
         
         await message.answer(response, reply_markup=main_menu_keyboard(message.from_user.id))
         await state.clear()
+        
+        # Логирование успешного завершения
+        logging.info(f"Успешно обработан запрос информации для товара {article} (пользователь: {user_id})")
         
     except Exception as e:
         logging.error(f"Ошибка в обработчике информации: {str(e)}")
