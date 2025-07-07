@@ -324,6 +324,10 @@ class TaskStates(StatesGroup):
     add_link = State()
     add_deadline = State()
     delete_task = State()
+    select_audience = State()  
+    input_manual_ids = State()
+
+
 # ===================== КЛАВИАТУРЫ =====================
 def create_keyboard(buttons: List[str], sizes: tuple, resize=True, one_time=False) -> types.ReplyKeyboardMarkup:
     """Универсальный конструктор клавиатур"""
@@ -1859,21 +1863,21 @@ async def send_to_all(message: types.Message, state: FSMContext):
     success = 0
     failed = 0
     
-    for task_id, task in tasks.items():
-        task_msg = format_task_message(task_id, task)
-        
-        for user_id in users:
-            try:
+    for user_id in users:
+        try:
+            for task_id, task in tasks.items():
+                task_msg = format_task_message(task_id, task)
                 await bot.send_message(
                     user_id,
                     task_msg,
                     parse_mode=ParseMode.MARKDOWN,
-                    reply_markup=get_task_keyboard(task_id))
-                success += 1
-                logging.info(f"Отправлено пользователю {user_id}: задача {task_id}")
-            except Exception as e:
-                failed += 1
-                logging.error(f"Ошибка отправки {user_id}: {str(e)}")
+                    reply_markup=get_task_keyboard(task_id)
+                )
+            success += 1
+            logging.info(f"Успешно отправлено пользователю {user_id}")
+        except Exception as e:
+            failed += 1
+            logging.error(f"Ошибка отправки {user_id}: {str(e)}")
     
     await message.answer(
         f"📊 Результат рассылки:\n"
@@ -1904,22 +1908,21 @@ async def send_to_manual_ids(message: types.Message, state: FSMContext):
     
     results = {"success": 0, "failed": 0}
     
-    for task_id, task in tasks.items():
-        task_msg = format_task_message(task_id, task)
-        
-        for user_id in user_ids:
-            try:
+    for user_id in user_ids:
+        try:
+            for task_id, task in tasks.items():
+                task_msg = format_task_message(task_id, task)
                 await bot.send_message(
                     user_id,
                     task_msg,
                     parse_mode=ParseMode.MARKDOWN,
                     reply_markup=get_task_keyboard(task_id)
                 )
-                results["success"] += 1
-                logging.info(f"Отправлено пользователю {user_id}: задача {task_id}")
-            except Exception as e:
-                results["failed"] += 1
-                logging.error(f"Ошибка отправки {user_id}: {str(e)}")
+            results["success"] += 1
+            logging.info(f"Успешно отправлено пользователю {user_id}")
+        except Exception as e:
+            results["failed"] += 1
+            logging.error(f"Ошибка отправки {user_id}: {str(e)}")
     
     await message.answer(
         f"📊 Результат рассылки:\n"
@@ -1930,6 +1933,10 @@ async def send_to_manual_ids(message: types.Message, state: FSMContext):
     )
     await state.clear()
 
+@dp.message(TaskStates.select_audience, F.text == "❌ Отмена")
+async def cancel_sending(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("❌ Рассылка отменена", reply_markup=tasks_admin_keyboard())
 
 @dp.callback_query(F.data.startswith("task_done:"))
 async def mark_task_done(callback: types.CallbackQuery):
