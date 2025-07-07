@@ -395,8 +395,8 @@ def broadcast_confirmation_keyboard():
 
 def tasks_admin_keyboard() -> types.ReplyKeyboardMarkup:
     return create_keyboard(
-        ["➕ Добавить задачу", "🗑️ Удалить задачу", "📤 Отправить список", "🔙 Назад"],
-        (2, 2)
+        ["➕ Добавить задачу", "🗑️ Удалить задачу", "📤 Отправить список", "📊 Статистика", "🔙 Назад"],
+        (2, 2, 1)
     )
 
 def get_task_keyboard(task_id: str) -> types.InlineKeyboardMarkup:
@@ -1846,16 +1846,63 @@ async def delete_task_handler(message: types.Message, state: FSMContext):
 
 
 @dp.message(F.text == "📤 Отправить список")
-async def send_tasks_list_start(message: types.Message, state: FSMContext):
+async def send_tasks_menu(message: types.Message, state: FSMContext):
     tasks = await load_tasks()
     if not tasks:
         await message.answer("❌ Нет задач для отправки.", reply_markup=tasks_admin_keyboard())
         return
     
     await state.update_data(tasks=tasks)
+    keyboard = create_keyboard(
+        ["Отправить все", "Выбрать задачи", "Статистика выполнения", "🔙 Назад"],
+        (2, 2)
+    )
+    await message.answer("Выберите действие:", reply_markup=keyboard)
+    await state.set_state(TaskStates.select_tasks)
+
+@dp.message(TaskStates.select_tasks, F.text == "Отправить все")
+async def send_all_tasks(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    tasks = data['tasks']
+    
+    # Показываем меню выбора аудитории
     await message.answer(
-        "Выберите аудиторию для рассылки:",
-        reply_markup=create_keyboard(["Всем пользователям", "По магазинам", "Вручную ввести ID", "❌ Отмена"], (2, 2))
+        "Выберите аудиторию:",
+        reply_markup=create_keyboard(["Всем", "По магазинам", "Вручную", "🔙 Назад"], (2, 2))
+    )
+    await state.set_state(TaskStates.select_audience)
+
+@dp.message(TaskStates.select_tasks, F.text == "Выбрать задачи")
+async def select_tasks_to_send(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    tasks = data['tasks']
+    
+    tasks_list = "\n".join([f"{task_id}: {task['text']}" for task_id, task in tasks.items()])
+    await message.answer(
+        f"Введите ID задач через запятую:\n{tasks_list}",
+        reply_markup=cancel_keyboard()
+    )
+    await state.set_state(TaskStates.input_task_ids)
+
+@dp.message(TaskStates.input_task_ids)
+async def process_task_ids(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    all_tasks = data['tasks']
+    selected_ids = [tid.strip() for tid in message.text.split(",")]
+    
+    # Фильтруем только существующие задачи
+    tasks_to_send = {tid: all_tasks[tid] for tid in selected_ids if tid in all_tasks}
+    
+    if not tasks_to_send:
+        await message.answer("❌ Не выбрано ни одной действительной задачи.")
+        return
+    
+    await state.update_data(selected_tasks=tasks_to_send)
+    
+    # Показываем меню выбора аудитории
+    await message.answer(
+        f"Выбрано задач: {len(tasks_to_send)}\nВыберите аудиторию:",
+        reply_markup=create_keyboard(["Всем", "По магазинам", "Вручную", "🔙 Назад"], (2, 2))
     )
     await state.set_state(TaskStates.select_audience)
 
@@ -1901,6 +1948,25 @@ async def ask_for_manual_ids(message: types.Message, state: FSMContext):
     )
     await state.set_state(TaskStates.input_manual_ids)
 
+async def send_selected_tasks(selected_tasks: dict, user_ids: list):
+    results = {"success": 0, "failed": 0}
+    
+    for user_id in user_ids:
+        try:
+            for task_id, task in selected_tasks.items():
+                await bot.send_message(
+                    user_id,
+                    format_task_message(task_id, task),
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=get_task_keyboard(task_id)
+            results["success"] += 1
+            logging.info(f"Sent tasks to {user_id}")
+        except Exception as e:
+            results["failed"] += 1
+            logging.error(f"Error sending to {user_id}: {str(e)}")
+    
+    return results
+
 @dp.message(TaskStates.input_manual_ids)
 async def send_to_manual_ids(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -1938,10 +2004,20 @@ async def send_to_manual_ids(message: types.Message, state: FSMContext):
     )
     await state.clear()
 
+
+@dp.message(F.text == "🔙 Назад")
+async def handle_back_from_tasks(message: types.Message, state: FSMContext):
+    """Обработчик кнопки Назад в меню задач"""
+    await state.clear()
+    await message.answer("🔙 Возврат в админ-панель", 
+                        reply_markup=admin_panel_keyboard())
+
+
 @dp.message(TaskStates.select_audience, F.text == "❌ Отмена")
 async def cancel_sending(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("❌ Рассылка отменена", reply_markup=tasks_admin_keyboard())
+
 
 @dp.callback_query(F.data.startswith("task_done:"))
 async def mark_task_done(callback: types.CallbackQuery):
@@ -1993,6 +2069,57 @@ async def check_deadlines():
                         continue
         
         await asyncio.sleep(86400)  # Проверка раз в сутки
+
+
+@dp.message(TaskStates.select_tasks, F.text == "Статистика выполнения")
+async def show_stats_menu(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    tasks = data['tasks']
+    
+    stats = []
+    for task_id, task in tasks.items():
+        completed = len(task['completed_by'])
+        stats.append(f"{task_id}: {task['text']} - ✅ {completed} чел.")
+    
+    await message.answer(
+        "📊 Статистика выполнения:\n\n" + "\n".join(stats),
+        reply_markup=create_keyboard(["Детали по задаче", "🔙 Назад"], (1,))
+    )
+    await state.set_state(TaskStates.view_stats)
+
+@dp.message(TaskStates.view_stats, F.text == "Детали по задаче")
+async def ask_for_task_details(message: types.Message, state: FSMContext):
+    await message.answer("Введите ID задачи для детализации:", reply_markup=cancel_keyboard())
+    await state.set_state(TaskStates.input_task_id_for_details)
+
+@dp.message(TaskStates.input_task_id_for_details)
+async def show_task_details(message: types.Message, state: FSMContext):
+    task_id = message.text.strip()
+    data = await state.get_data()
+    tasks = data['tasks']
+    
+    if task_id not in tasks:
+        await message.answer("❌ Задача не найдена.")
+        return
+    
+    task = tasks[task_id]
+    completed_users = task['completed_by']
+    
+    # Получаем имена выполнивших
+    user_names = []
+    for user_id in completed_users:
+        initials = await get_user_initials(user_id)
+        user_names.append(f"{initials} (ID: {user_id})")
+    
+    response = (
+        f"📋 Детали задачи {task_id}:\n"
+        f"Текст: {task['text']}\n"
+        f"Выполнили ({len(completed_users)}):\n"
+    )
+    response += "\n".join(user_names) if user_names else "Никто не выполнил"
+    
+    await message.answer(response, reply_markup=tasks_admin_keyboard())
+    await state.clear()
 
 # ===================== ЗАПУСК ПРИЛОЖЕНИЯ =====================
 async def scheduled_cache_update():
