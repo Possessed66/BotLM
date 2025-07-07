@@ -260,6 +260,7 @@ STATSS_SHEET_NAME = "Статистика_Пользователей"
 ORDERS_SPREADSHEET_NAME = "Копия Заказы МЗ 0.2"
 USERS_SHEET_NAME = "Пользователи"
 GAMMA_CLUSTER_SHEET = "Гамма кластер"
+TASKS_SHEET_NAME = "Задачи"
 LOGS_SHEET = "Логи"
 BARCODES_SHEET_NAME = "Штрих-коды"
 MAX_IMAGE_SIZE = 2_000_000
@@ -318,6 +319,11 @@ class AdminBroadcast(StatesGroup):
     manual_ids = State()
     confirmation = State()
 
+class TaskStates(StatesGroup):
+    add_text = State()
+    add_link = State()
+    add_deadline = State()
+    delete_task = State()
 # ===================== КЛАВИАТУРЫ =====================
 def create_keyboard(buttons: List[str], sizes: tuple, resize=True, one_time=False) -> types.ReplyKeyboardMarkup:
     """Универсальный конструктор клавиатур"""
@@ -383,6 +389,16 @@ def broadcast_confirmation_keyboard():
         (2,)
     )
 
+def tasks_admin_keyboard() -> types.ReplyKeyboardMarkup:
+    return create_keyboard(
+        ["➕ Добавить задачу", "🗑️ Удалить задачу", "📤 Отправить список", "🔙 Назад"],
+        (2, 2)
+    )
+
+def get_task_keyboard(task_id: str) -> types.InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Выполнено", callback_data=f"task_done:{task_id}")
+    return builder.as_markup()
 
 # ===================== СЕРВИСНЫЕ ФУНКЦИИ =====================
 async def notify_admins(message: str) -> None:
@@ -472,6 +488,72 @@ async def log_user_activity(user_id: str, command: str, event_type: str = "comma
 
 
 
+
+##Задачи\\\\\\\\\\\\\\\\\
+
+
+def get_tasks_sheet():
+    """Возвращает лист с задачами"""
+    return main_spreadsheet.worksheet(TASKS_SHEET_NAME)
+
+async def get_user_initials(user_id: int) -> str:
+    """Возвращает инициалы пользователя (например, 'И.Иванов')"""
+    user_data = await get_user_data(str(user_id))
+    if not user_data:
+        return "Аноним"
+    name = user_data.get("Имя", "")
+    surname = user_data.get("Фамилия", "")
+    return f"{name[0]}.{surname}" if name else surname
+
+async def save_task(
+    task_id: str,
+    text: str,
+    creator_id: int,
+    creator_initials: str,
+    link: str = None,
+    deadline: str = None
+):
+    """Сохранение задачи в Google Sheets"""
+    sheet = get_tasks_sheet()
+    sheet.append_row([
+        task_id,
+        text,
+        link,
+        deadline,
+        creator_id,
+        creator_initials,
+        datetime.now().strftime("%d.%m.%Y %H:%M"),
+        json.dumps({"user_ids": []})  # Пустой список для статусов
+    ])
+
+async def load_tasks() -> dict:
+    """Загрузка задач из Google Sheets"""
+    sheet = get_tasks_sheet()
+    tasks = {}
+    for row in sheet.get_all_records():
+        tasks[row["ID задачи"]] = {
+            "text": row["Текст"],
+            "link": row["Ссылка"],
+            "deadline": row["Дедлайн"],
+            "creator_initials": row["Инициалы"],
+            "completed_by": json.loads(row["Статусы"]).get("user_ids", [])
+        }
+    return tasks
+
+async def delete_task(task_id: str, user_id: int) -> bool:
+    """Удаление задачи с проверкой прав"""
+    sheet = get_tasks_sheet()
+    cell = sheet.find(task_id)
+    if not cell:
+        return False
+    
+    # Проверяем, что удаляет автор или админ
+    task_creator_id = int(sheet.cell(cell.row, 5).value)
+    if user_id != task_creator_id and user_id not in ADMINS:
+        return False
+    
+    sheet.delete_rows(cell.row)
+    return True
 
 # =============================ПАРСЕР=================================
 
@@ -1659,6 +1741,166 @@ async def disable_service_mode(message: types.Message):
     await message.answer("✅ Сервисный режим выключен", 
                         reply_markup=admin_panel_keyboard())
 
+
+
+
+
+#============================Задачи========================
+@dp.message(F.text == "📝 Управление задачами")
+async def handle_task_menu(message: types.Message):
+    if message.from_user.id not in ADMINS:
+        return
+    await message.answer("📝 Управление задачами:", reply_markup=tasks_admin_keyboard())
+
+@dp.message(F.text == "➕ Добавить задачу")
+async def add_task_text(message: types.Message, state: FSMContext):
+    await message.answer("📝 Введите текст задачи:", reply_markup=cancel_keyboard())
+    await state.set_state(TaskStates.add_text)
+
+@dp.message(TaskStates.add_text)
+async def add_task_link(message: types.Message, state: FSMContext):
+    await state.update_data(text=message.text)
+    await message.answer("🔗 Пришлите ссылку на Google Sheets (или /skip):")
+    await state.set_state(TaskStates.add_link)
+
+@dp.message(TaskStates.add_link)
+async def add_task_deadline(message: types.Message, state: FSMContext):
+    link = message.text if message.text != "/skip" else None
+    await state.update_data(link=link)
+    await message.answer("📅 Укажите дедлайн (ДД.ММ.ГГГГ или /skip):")
+    await state.set_state(TaskStates.add_deadline)
+
+@dp.message(TaskStates.add_deadline)
+async def save_task_handler(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    deadline = message.text if message.text != "/skip" else None
+    
+    if deadline and not re.match(r"^\d{2}\.\d{2}\.\d{4}$", deadline):
+        await message.answer("❌ Неверный формат даты. Используйте ДД.ММ.ГГГГ:")
+        return
+    
+    task_id = str(int(time.time()))
+    creator_initials = await get_user_initials(message.from_user.id)
+    
+    await save_task(
+        task_id=task_id,
+        text=data["text"],
+        creator_id=message.from_user.id,
+        creator_initials=creator_initials,
+        link=data.get("link"),
+        deadline=deadline
+    )
+    
+    await message.answer(
+        f"✅ Задача добавлена!\n"
+        f"ID: `{task_id}`\n"
+        f"Дедлайн: {deadline if deadline else 'не установлен'}",
+        reply_markup=tasks_admin_keyboard()
+    )
+    await state.clear()
+
+
+@dp.message(F.text == "🗑️ Удалить задачу")
+async def delete_task_start(message: types.Message, state: FSMContext):
+    tasks = await load_tasks()
+    if not tasks:
+        await message.answer("❌ Нет задач для удаления.")
+        return
+    
+    tasks_list = "\n".join(f"ID: `{id}` — {task['text']}" for id, task in tasks.items())
+    await message.answer(
+        f"Введите ID задачи для удаления:\n{tasks_list}",
+        reply_markup=cancel_keyboard()
+    )
+    await state.set_state(TaskStates.delete_task)
+
+@dp.message(TaskStates.delete_task)
+async def delete_task_handler(message: types.Message, state: FSMContext):
+    task_id = message.text.strip()
+    if not await delete_task(task_id, message.from_user.id):
+        await message.answer("❌ Задача не найдена или нет прав!")
+    else:
+        await message.answer("✅ Задача удалена!", reply_markup=tasks_admin_keyboard())
+    await state.clear()
+
+
+
+@dp.message(F.text == "📤 Отправить список")
+async def send_tasks_list(message: types.Message):
+    tasks = await load_tasks()
+    if not tasks:
+        await message.answer("❌ Нет задач для отправки.")
+        return
+    
+    for task_id, task in tasks.items():
+        task_msg = (
+            f"📌 *Задача #{task_id}*\n"
+            f"▫️ {task['text']}\n"
+            f"👤 Создал: {task['creator_initials']}\n"
+            f"⏰ Дедлайн: {task.get('deadline', 'не установлен')}\n"
+            f"🔗 {task['link'] if task['link'] else 'Нет ссылки'}"
+        )
+        
+        # Отправляем всем пользователям (или выбранной аудитории)
+        users = users_sheet.col_values(1)  # ID из Google Sheets
+        for user_id in users:
+            try:
+                await bot.send_message(
+                    user_id,
+                    task_msg,
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=get_task_keyboard(task_id)
+                )
+            except Exception:
+                continue
+    
+    await message.answer("✅ Задачи отправлены!", reply_markup=tasks_admin_keyboard())
+
+
+@dp.callback_query(F.data.startswith("task_done:"))
+async def mark_task_done(callback: types.CallbackQuery):
+    task_id = callback.data.split(":")[1]
+    user_id = callback.from_user.id
+    
+    sheet = get_tasks_sheet()
+    cell = sheet.find(task_id)
+    if not cell:
+        await callback.answer("❌ Задача не найдена!")
+        return
+    
+    # Обновляем статус в Google Sheets
+    statuses = json.loads(sheet.cell(cell.row, 8).value)
+    if user_id not in statuses["user_ids"]:
+        statuses["user_ids"].append(user_id)
+        sheet.update_cell(cell.row, 8, json.dumps(statuses))
+        await callback.answer("✅ Задача выполнена!")
+    else:
+        await callback.answer("✔️ Уже отмечено ранее")
+
+
+async def check_deadlines():
+    while True:
+        tasks = await load_tasks()
+        today = datetime.now().strftime("%d.%m.%Y")
+        
+        for task_id, task in tasks.items():
+            if not task.get("deadline"):
+                continue
+                
+            if task["deadline"] < today:  # Просрочено
+                for user_id in task["completed_by"]:
+                    try:
+                        await bot.send_message(
+                            user_id,
+                            f"🚨 *Просрочено!*\nЗадача: {task['text']}\n"
+                            f"Дедлайн был: {task['deadline']}",
+                            parse_mode=ParseMode.MARKDOWN
+                        )
+                    except Exception:
+                        continue
+        
+        await asyncio.sleep(86400)  # Проверка раз в сутки
+
 # ===================== ЗАПУСК ПРИЛОЖЕНИЯ =====================
 async def scheduled_cache_update():
     """Плановое обновление кэша"""
@@ -1679,7 +1921,7 @@ async def startup():
         await preload_cache()
         asyncio.create_task(scheduled_cache_update())
         asyncio.create_task(state_cleanup_task())
-        
+        asyncio.create_task(check_deadlines())
         logging.info("✅ Кэш загружен, задачи запущены")
     except Exception as e:
         logging.critical(f"🚨 Критическая ошибка запуска: {str(e)}")
