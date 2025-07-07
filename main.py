@@ -1868,7 +1868,7 @@ async def send_to_all(message: types.Message, state: FSMContext):
                     user_id,
                     task_msg,
                     parse_mode=ParseMode.MARKDOWN,
-                    reply_markup=get_task_keyboard(task_id)
+                    reply_markup=get_task_keyboard(task_id))
                 success += 1
                 logging.info(f"Отправлено пользователю {user_id}: задача {task_id}")
             except Exception as e:
