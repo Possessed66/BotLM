@@ -1746,6 +1746,17 @@ async def disable_service_mode(message: types.Message):
 
 
 #============================Задачи========================
+def format_task_message(task_id: str, task: dict) -> str:
+    """Форматирует сообщение с задачей"""
+    return (
+        f"📌 *Задача #{task_id}*\n"
+        f"▫️ {task['text']}\n"
+        f"👤 Создал: {task['creator_initials']}\n"
+        f"⏰ Дедлайн: {task.get('deadline', 'не установлен')}\n"
+        f"🔗 {task['link'] if task['link'] else 'Нет ссылки'}"
+    )
+
+
 @dp.message(F.text == "📝 Управление задачами")
 async def handle_task_menu(message: types.Message):
     if message.from_user.id not in ADMINS:
@@ -1826,23 +1837,31 @@ async def delete_task_handler(message: types.Message, state: FSMContext):
 
 
 @dp.message(F.text == "📤 Отправить список")
-async def send_tasks_list(message: types.Message):
+async def send_tasks_list_start(message: types.Message, state: FSMContext):
     tasks = await load_tasks()
     if not tasks:
-        await message.answer("❌ Нет задач для отправки.")
+        await message.answer("❌ Нет задач для отправки.", reply_markup=tasks_admin_keyboard())
         return
     
+    await state.update_data(tasks=tasks)
+    await message.answer(
+        "Выберите аудиторию для рассылки:",
+        reply_markup=create_keyboard(["Всем пользователям", "По магазинам", "Вручную ввести ID", "❌ Отмена"], (2, 2))
+    )
+    await state.set_state(TaskStates.select_audience)
+
+@dp.message(TaskStates.select_audience, F.text == "Всем пользователям")
+async def send_to_all(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    tasks = data['tasks']
+    users = users_sheet.col_values(1)  # Все ID из Google Sheets
+    
+    success = 0
+    failed = 0
+    
     for task_id, task in tasks.items():
-        task_msg = (
-            f"📌 *Задача #{task_id}*\n"
-            f"▫️ {task['text']}\n"
-            f"👤 Создал: {task['creator_initials']}\n"
-            f"⏰ Дедлайн: {task.get('deadline', 'не установлен')}\n"
-            f"🔗 {task['link'] if task['link'] else 'Нет ссылки'}"
-        )
+        task_msg = format_task_message(task_id, task)
         
-        # Отправляем всем пользователям (или выбранной аудитории)
-        users = users_sheet.col_values(1)  # ID из Google Sheets
         for user_id in users:
             try:
                 await bot.send_message(
@@ -1850,11 +1869,66 @@ async def send_tasks_list(message: types.Message):
                     task_msg,
                     parse_mode=ParseMode.MARKDOWN,
                     reply_markup=get_task_keyboard(task_id)
-                )
-            except Exception:
-                continue
+                success += 1
+                logging.info(f"Отправлено пользователю {user_id}: задача {task_id}")
+            except Exception as e:
+                failed += 1
+                logging.error(f"Ошибка отправки {user_id}: {str(e)}")
     
-    await message.answer("✅ Задачи отправлены!", reply_markup=tasks_admin_keyboard())
+    await message.answer(
+        f"📊 Результат рассылки:\n"
+        f"• Всего получателей: {len(users)}\n"
+        f"• Успешно: {success}\n"
+        f"• Не удалось: {failed}",
+        reply_markup=tasks_admin_keyboard()
+    )
+    await state.clear()
+
+@dp.message(TaskStates.select_audience, F.text == "Вручную ввести ID")
+async def ask_for_manual_ids(message: types.Message, state: FSMContext):
+    await message.answer(
+        "Введите ID пользователей через запятую:",
+        reply_markup=cancel_keyboard()
+    )
+    await state.set_state(TaskStates.input_manual_ids)
+
+@dp.message(TaskStates.input_manual_ids)
+async def send_to_manual_ids(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    tasks = data['tasks']
+    user_ids = [uid.strip() for uid in message.text.split(",") if uid.strip().isdigit()]
+    
+    if not user_ids:
+        await message.answer("❌ Нет валидных ID. Попробуйте снова.")
+        return
+    
+    results = {"success": 0, "failed": 0}
+    
+    for task_id, task in tasks.items():
+        task_msg = format_task_message(task_id, task)
+        
+        for user_id in user_ids:
+            try:
+                await bot.send_message(
+                    user_id,
+                    task_msg,
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=get_task_keyboard(task_id)
+                )
+                results["success"] += 1
+                logging.info(f"Отправлено пользователю {user_id}: задача {task_id}")
+            except Exception as e:
+                results["failed"] += 1
+                logging.error(f"Ошибка отправки {user_id}: {str(e)}")
+    
+    await message.answer(
+        f"📊 Результат рассылки:\n"
+        f"• Получателей: {len(user_ids)}\n"
+        f"• Успешно: {results['success']}\n"
+        f"• Не удалось: {results['failed']}",
+        reply_markup=tasks_admin_keyboard()
+    )
+    await state.clear()
 
 
 @dp.callback_query(F.data.startswith("task_done:"))
