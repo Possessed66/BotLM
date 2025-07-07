@@ -405,7 +405,7 @@ def get_task_keyboard(task_id: str) -> types.InlineKeyboardMarkup:
         text="✅ Выполнено", 
         callback_data=f"task_done:{task_id}"
     )
-    return builder.as_markup())
+    return builder.as_markup()
 
 # ===================== СЕРВИСНЫЕ ФУНКЦИИ =====================
 async def notify_admins(message: str) -> None:
