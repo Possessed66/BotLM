@@ -522,7 +522,7 @@ async def get_user_initials(user_id: int) -> str:
         return "Аноним"
     name = user_data.get("name", "")
     surname = user_data.get("surname", "")
-    return f"{name[0]}.{surname}" if name else surname
+    return f"{name}.{surname}" if name else surname
 
 async def save_task(
     task_id: str,
