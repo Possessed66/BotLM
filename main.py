@@ -24,7 +24,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.enums import ParseMode
-from aiogram.utils.keyboard import ReplyKeyboardBuilder
+from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 from aiogram.types import ReplyKeyboardRemove, File, BufferedInputFile
 from aiogram.exceptions import TelegramForbiddenError
 from aiogram.filters import Command
@@ -401,8 +401,11 @@ def tasks_admin_keyboard() -> types.ReplyKeyboardMarkup:
 
 def get_task_keyboard(task_id: str) -> types.InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Выполнено", callback_data=f"task_done:{task_id}")
-    return builder.as_markup()
+    builder.button(
+        text="✅ Выполнено", 
+        callback_data=f"task_done:{task_id}"
+    )
+    return builder.as_markup())
 
 # ===================== СЕРВИСНЫЕ ФУНКЦИИ =====================
 async def notify_admins(message: str) -> None:
@@ -1751,13 +1754,15 @@ async def disable_service_mode(message: types.Message):
 
 #============================Задачи========================
 def format_task_message(task_id: str, task: dict) -> str:
-    """Форматирует сообщение с задачей"""
+    deadline = task.get('Дедлайн')
+    deadline_text = f"⏰ Дедлайн: {deadline}" if deadline else "⏳ Без дедлайна"
+    
     return (
         f"📌 *Задача #{task_id}*\n"
         f"▫️ {task['text']}\n"
         f"👤 Создал: {task['creator_initials']}\n"
-        f"⏰ Дедлайн: {task.get('deadline', 'не установлен')}\n"
-        f"🔗 {task['link'] if task['link'] else 'Нет ссылки'}"
+        f"{deadline_text}\n"
+        f"🔗 {'[Ссылка](' + task['link'] + ')' if task.get('link') else 'Нет ссылки'}"
     )
 
 
@@ -1943,20 +1948,27 @@ async def mark_task_done(callback: types.CallbackQuery):
     task_id = callback.data.split(":")[1]
     user_id = callback.from_user.id
     
-    sheet = get_tasks_sheet()
-    cell = sheet.find(task_id)
-    if not cell:
-        await callback.answer("❌ Задача не найдена!")
-        return
-    
-    # Обновляем статус в Google Sheets
-    statuses = json.loads(sheet.cell(cell.row, 8).value)
-    if user_id not in statuses["user_ids"]:
-        statuses["user_ids"].append(user_id)
-        sheet.update_cell(cell.row, 8, json.dumps(statuses))
-        await callback.answer("✅ Задача выполнена!")
-    else:
-        await callback.answer("✔️ Уже отмечено ранее")
+    try:
+        sheet = get_tasks_sheet()
+        cell = sheet.find(task_id)
+        if not cell:
+            await callback.answer("❌ Задача не найдена!")
+            return
+        
+        # Получаем текущие статусы
+        statuses = json.loads(sheet.cell(cell.row, 8).value)  # Колонка 8 - "Статусы"
+        
+        # Добавляем пользователя если его еще нет
+        if str(user_id) not in statuses["user_ids"]:
+            statuses["user_ids"].append(str(user_id))
+            sheet.update_cell(cell.row, 8, json.dumps(statuses))
+            await callback.answer("✅ Задача отмечена выполненной!")
+        else:
+            await callback.answer("✔️ Вы уже отмечали эту задачу")
+            
+    except Exception as e:
+        logging.error(f"Ошибка при отметке задачи: {str(e)}")
+        await callback.answer("❌ Ошибка сервера")
 
 
 async def check_deadlines():
