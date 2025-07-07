@@ -520,8 +520,8 @@ async def get_user_initials(user_id: int) -> str:
     user_data = await get_user_data(str(user_id))
     if not user_data:
         return "Аноним"
-    name = user_data.get("Имя", "")
-    surname = user_data.get("Фамилия", "")
+    name = user_data.get("name", "")
+    surname = user_data.get("surname", "")
     return f"{name[0]}.{surname}" if name else surname
 
 async def save_task(
@@ -1896,23 +1896,50 @@ async def select_action_to_send(message: types.Message, state: FSMContext):
     await state.set_state(TaskStates.input_task_ids)
 
 @dp.message(TaskStates.input_task_ids)
+@dp.message(TaskStates.input_task_ids)
 async def process_task_ids(message: types.Message, state: FSMContext):
     data = await state.get_data()
     all_tasks = data['tasks']
-    selected_ids = [tid.strip() for tid in message.text.split(",")]
     
-    # Фильтруем только существующие задачи
-    tasks_to_send = {tid: all_tasks[tid] for tid in selected_ids if tid in all_tasks}
+    # Нормализуем ввод: удаляем пробелы и пустые значения
+    input_ids = [tid.strip() for tid in message.text.split(",") if tid.strip()]
     
-    if not tasks_to_send:
-        await message.answer("❌ Не выбрано ни одной действительной задачи.")
+    if not input_ids:
+        await message.answer("❌ Не указано ни одного ID задачи.")
         return
     
-    await state.update_data(selected_tasks=tasks_to_send)
+    # Преобразуем все ID к строковому типу для сравнения
+    all_task_ids = {str(k): v for k, v in all_tasks.items()}
     
-    # Показываем меню выбора аудитории
+    # Фильтруем задачи
+    valid_tasks = {}
+    invalid_ids = []
+    
+    for input_id in input_ids:
+        if input_id in all_task_ids:
+            valid_tasks[input_id] = all_task_ids[input_id]
+        else:
+            invalid_ids.append(input_id)
+    
+    if not valid_tasks:
+        await message.answer("❌ Не найдено ни одной действительной задачи.")
+        return
+    
+    # Сообщаем о невалидных ID (если есть)
+    if invalid_ids:
+        await message.answer(
+            f"⚠️ Не найдены задачи с ID: {', '.join(invalid_ids)}\n"
+            f"Будут отправлены только действительные задачи.",
+            reply_markup=types.ReplyKeyboardRemove()
+        )
+        await asyncio.sleep(2)  # Даем время прочитать сообщение
+    
+    await state.update_data(selected_tasks=valid_tasks)
+    
+    # Переходим к выбору аудитории
     await message.answer(
-        f"Выбрано задач: {len(tasks_to_send)}\nВыберите аудиторию:",
+        f"✅ Готово к отправке: {len(valid_tasks)} задач\n"
+        "Выберите аудиторию:",
         reply_markup=create_keyboard(["Всем", "По магазинам", "Вручную", "🔙 Назад"], (2, 2))
     )
     await state.set_state(TaskStates.select_audience)
