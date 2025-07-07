@@ -320,12 +320,24 @@ class AdminBroadcast(StatesGroup):
     confirmation = State()
 
 class TaskStates(StatesGroup):
+    # Состояния для добавления задач
     add_text = State()
     add_link = State()
     add_deadline = State()
+    
+    # Состояния для удаления задач
     delete_task = State()
-    select_audience = State()  
-    input_manual_ids = State()
+    
+    # Состояния для отправки задач
+    select_action = State()  # Выбор действия (отправить/статистика)
+    select_tasks = State()   # Выбор задач для отправки
+    input_task_ids = State() # Ввод ID задач вручную
+    select_audience = State() # Выбор аудитории
+    input_manual_ids = State() # Ввод ID пользователей
+    
+    # Состояния для статистики
+    view_stats = State()     # Просмотр статистики
+    input_task_id_for_details = State() # Ввод ID для детализации
 
 
 # ===================== КЛАВИАТУРЫ =====================
@@ -1858,22 +1870,21 @@ async def send_tasks_menu(message: types.Message, state: FSMContext):
         (2, 2)
     )
     await message.answer("Выберите действие:", reply_markup=keyboard)
-    await state.set_state(TaskStates.select_tasks)
+    await state.set_state(TaskStates.select_action)
 
-@dp.message(TaskStates.select_tasks, F.text == "Отправить все")
+@dp.message(TaskStates.select_action, F.text == "Отправить все")
 async def send_all_tasks(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    tasks = data['tasks']
+    await state.update_data(selected_tasks=data['tasks'])  # Выбираем все задачи
     
-    # Показываем меню выбора аудитории
     await message.answer(
         "Выберите аудиторию:",
         reply_markup=create_keyboard(["Всем", "По магазинам", "Вручную", "🔙 Назад"], (2, 2))
     )
     await state.set_state(TaskStates.select_audience)
 
-@dp.message(TaskStates.select_tasks, F.text == "Выбрать задачи")
-async def select_tasks_to_send(message: types.Message, state: FSMContext):
+@dp.message(TaskStates.select_action, F.text == "Выбрать задачи")
+async def select_action_to_send(message: types.Message, state: FSMContext):
     data = await state.get_data()
     tasks = data['tasks']
     
@@ -2071,7 +2082,7 @@ async def check_deadlines():
         await asyncio.sleep(86400)  # Проверка раз в сутки
 
 
-@dp.message(TaskStates.select_tasks, F.text == "Статистика выполнения")
+@dp.message(TaskStates.select_action, F.text == "Статистика выполнения")
 async def show_stats_menu(message: types.Message, state: FSMContext):
     data = await state.get_data()
     tasks = data['tasks']
