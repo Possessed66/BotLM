@@ -1958,7 +1958,7 @@ async def send_selected_tasks(selected_tasks: dict, user_ids: list):
                     user_id,
                     format_task_message(task_id, task),
                     parse_mode=ParseMode.MARKDOWN,
-                    reply_markup=get_task_keyboard(task_id)
+                    reply_markup=get_task_keyboard(task_id))
             results["success"] += 1
             logging.info(f"Sent tasks to {user_id}")
         except Exception as e:
