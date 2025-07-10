@@ -12,11 +12,7 @@ import threading
 import tracemalloc
 import objgraph
 import psutil
-from pyzbar.pyzbar import decode
-from io import BytesIO
 from aiogram.exceptions import TelegramBadRequest
-from PIL import Image, ImageEnhance
-from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
@@ -262,7 +258,6 @@ USERS_SHEET_NAME = "Пользователи"
 GAMMA_CLUSTER_SHEET = "Гамма кластер"
 TASKS_SHEET_NAME = "Задачи"
 LOGS_SHEET = "Логи"
-BARCODES_SHEET_NAME = "Штрих-коды"
 MAX_IMAGE_SIZE = 2_000_000
 MAX_WORKERS = 4
 
@@ -292,7 +287,6 @@ except Exception as e:
     print(f"❌ Ошибка инициализации Google Sheets: {str(e)}")
     exit()
 
-image_processor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
 
 # ===================== СОСТОЯНИЯ FSM =====================
 class Registration(StatesGroup):
@@ -303,7 +297,6 @@ class Registration(StatesGroup):
 
 class OrderStates(StatesGroup):
     article_input = State()
-    barcode_scan = State()
     shop_selection = State()
     shop_input = State()
     quantity_input = State()
@@ -325,6 +318,7 @@ class TaskStates(StatesGroup):
     add_link = State()
     add_deadline = State()
     
+    
     # Состояния для удаления задач
     delete_task = State()
     
@@ -333,6 +327,7 @@ class TaskStates(StatesGroup):
     select_tasks = State()   # Выбор задач для отправки
     input_task_ids = State() # Ввод ID задач вручную
     select_audience = State() # Выбор аудитории
+    input_position = State()
     input_manual_ids = State() # Ввод ID пользователей
     
     # Состояния для статистики
@@ -361,8 +356,8 @@ def main_menu_keyboard(user_id: int = None) -> types.ReplyKeyboardMarkup:
 
 def article_input_keyboard() -> types.ReplyKeyboardMarkup:
     return create_keyboard(
-        ["🔍 Сканировать штрих-код", "⌨️ Ввести вручную", "❌ Отмена", "↩️ Назад"],
-        (2, 2)
+        [ "❌ Отмена"],
+        (1)
     )
 
 def shop_selection_keyboard() -> types.ReplyKeyboardMarkup:
@@ -616,107 +611,6 @@ def calculate_delivery_date(supplier_data: dict) -> Tuple[str, str]:
     )
 
 
-IMAGE_PROCESSING_SEMAPHORE = asyncio.Semaphore(MAX_WORKERS)
-
-
-async def process_barcode_image(photo: types.PhotoSize) -> Tuple[Optional[str], Optional[str]]:
-    """Улучшенная обработка изображений со штрих-кодом"""
-    start_time = time.monotonic()
-    # Проверка кэша штрих-кодов
-    if "barcodes_index" not in cache or not cache["barcodes_index"]:
-        return None, "Система штрих-кодов не настроена"
-
-    # Выбираем фото наилучшего качества
-    best_photo = max(photo, key=lambda p: p.width * p.height)
-    
-    try:
-        # Проверяем размер файла перед скачиванием
-        file_info = await bot.get_file(best_photo.file_id)
-        if file_info.file_size > MAX_IMAGE_SIZE:
-            return None, f"Изображение слишком большое ({file_info.file_size//1024}KB > {MAX_IMAGE_SIZE//1024}KB)"
-
-        # Скачиваем изображение частями с проверкой размера
-        image_bytes = b""
-        async with IMAGE_PROCESSING_SEMAPHORE:
-            file = await bot.get_file(photo.file_id)
-            async for chunk in file.download(destination=None):
-                if len(image_bytes) + len(chunk) > MAX_IMAGE_SIZE:
-                    return None, "Превышен максимальный размер изображения"
-                image_bytes += chunk
-
-        # Обработка в отдельном потоке
-        loop = asyncio.get_running_loop()
-        decoded_objects = None
-    
-        def process_image():
-            """Синхронная обработка изображения"""
-            nonlocal decoded_objects
-            try:
-                # Оптимизация изображения перед распознаванием
-                with io.BytesIO(image_bytes) as buffer:
-                    with Image.open(buffer) as img:
-                        # Конвертируем в grayscale для улучшения распознавания
-                        img = img.convert('L')
-                        
-                        # Увеличиваем контраст
-                        enhancer = ImageEnhance.Contrast(img)
-                        img = enhancer.enhance(2.0)
-                        
-                        # Масштабируем, сохраняя пропорции
-                        scale_factor = 800 / max(img.width, img.height)
-                        new_size = (int(img.width * scale_factor), int(img.height * scale_factor))
-                        img = img.resize(new_size, Image.LANCZOS)
-                        
-                        # Распознаем штрих-коды
-                        return decode(img)
-            except Exception as e:
-                logging.error(f"Ошибка обработки изображения: {str(e)}")
-                return None
-    
-        # Выполняем в thread pool с таймаутом
-        decoded_objects = await asyncio.wait_for(
-            loop.run_in_executor(image_processor, process_image),
-            timeout=15.0
-        )
-        
-        if not decoded_objects:
-            return None, "Штрих-код не распознан"
-
-        # Обрабатываем все найденные штрих-коды
-        barcodes_index = pickle.loads(cache["barcodes_index"])
-        for obj in decoded_objects:
-            try:
-                barcode_data = obj.data.decode("utf-8").strip()
-                if article := barcodes_index.get(barcode_data):
-                    return article, None
-            except UnicodeDecodeError:
-                # Пробуем альтернативные кодировки
-                for encoding in ['latin-1', 'cp1251']:
-                    try:
-                        barcode_data = obj.data.decode(encoding).strip()
-                        if article := barcodes_index.get(barcode_data):
-                            return article, None
-                    except:
-                        continue
-        
-        return None, "Распознанный штрих-код не найден в базе"
-    
-    except asyncio.TimeoutError:
-        return None, "Превышено время обработки изображения"
-    except TelegramBadRequest as e:
-        logging.error(f"Ошибка Telegram: {str(e)}")
-        return None, "Ошибка загрузки файла"
-    except Exception as e:
-        logging.exception(f"Критическая ошибка обработки: {str(e)}")
-        return None, "Ошибка обработки изображения"
-    finally:
-        duration = time.monotonic() - start_time
-        logging.info(f"Barcode processing took {duration:.2f} seconds")
-        # Принудительная очистка памяти
-        del image_bytes
-        gc.collect()
-
-
 @profile_memory
 async def get_product_info(article: str, shop: str) -> Optional[Dict[str, Any]]:
     """Получение информации о товаре с расширенным логированием"""
@@ -845,20 +739,6 @@ async def preload_cache() -> None:
                 }
         
         cache["gamma_index"] = pickle.dumps(gamma_index)
-        
-        # Кэширование штрих-кодов
-        barcodes_sheet = main_spreadsheet.worksheet(BARCODES_SHEET_NAME)
-        barcodes_data = barcodes_sheet.get_all_records()
-        barcodes_index = {}
-        
-        for record in barcodes_data:
-            barcode = str(record.get("Штрих-код", "")).strip()
-            article = str(record.get("Артикул", "")).strip()
-            if barcode and article:
-                barcodes_index[barcode] = article
-        
-        cache["barcodes_index"] = pickle.dumps(barcodes_index)
-
         cache_size = sum(len(pickle.dumps(v)) for v in cache.values()) / 1024 / 1024
         logging.info(f"✅ Кэш загружен. Размер: {cache_size:.2f} MB")
         
@@ -1053,33 +933,18 @@ async def handle_client_order(message: types.Message, state: FSMContext):
         user_position=user_data['position']
     )
     
-    await message.answer("📦 Выберите способ ввода артикула:", 
-                        reply_markup=article_input_keyboard())
+    await message.answer("🔢 Введите артикул товара:", 
+                         reply_markup=cancel_keyboard())
     await log_user_activity(message.from_user.id, "Заказ под клиента", "order")
     await state.set_state(OrderStates.article_input)
 
-@dp.message(OrderStates.article_input, F.text == "🔍 Сканировать штрих-код")
-async def handle_scan_choice(message: types.Message, state: FSMContext):
-    """Обработка выбора сканирования"""
-    await message.answer(
-        "📸 Отправьте фото штрих-кода товара\n\n"
-        "Советы для лучшего распознавания:\n"
-        "- Убедитесь, что штрих-код хорошо освещен\n"
-        "- Держите камеру прямо напротив штрих-кода\n"
-        "- Избегайте бликов и теней",
-        reply_markup=cancel_keyboard()
-    )
-    await state.set_state(OrderStates.barcode_scan)
-
-@dp.message(OrderStates.article_input, F.text == "⌨️ Ввести вручную")
-async def handle_manual_choice(message: types.Message, state: FSMContext):
-    """Обработка ручного ввода"""
-    await message.answer("🔢 Введите артикул товара вручную:", 
-                        reply_markup=article_input_keyboard())
 
 @dp.message(OrderStates.article_input)
-async def process_article_manual(message: types.Message, state: FSMContext):
+async def process_article_input(message: types.Message, state: FSMContext):
     """Обработка введенного артикула"""
+    if message.photo:
+        await message.answer("📸 Распознавание штрих-кодов отключено. Введите артикул вручную.")
+        return
     article = message.text.strip()
     
     if not re.match(r'^\d{4,10}$', article):
@@ -1091,49 +956,6 @@ async def process_article_manual(message: types.Message, state: FSMContext):
                         reply_markup=shop_selection_keyboard())
     await state.set_state(OrderStates.shop_selection)
 
-
-@profile_memory
-@dp.message(OrderStates.barcode_scan, F.photo)
-async def handle_barcode_scan(message: types.Message, state: FSMContext):
-    """Обработка фото штрих-кода с улучшенной логикой"""
-    try:
-        # Показываем статус обработки
-        processing_msg = await message.answer("🔍 Обработка изображения...")
-        
-        # Обрабатываем изображение
-        article, error = await process_barcode_image(message.photo)
-        
-        # Удаляем сообщение о статусе
-        await processing_msg.delete()
-        
-        if error:
-            # Предлагаем альтернативные варианты
-            await message.answer(
-                f"❌ {error}\nПопробуйте:\n"
-                "- Сфотографировать код при хорошем освещении\n"
-                "- Убедиться, что код не поврежден\n"
-                "- Или введите артикул вручную",
-                reply_markup=article_input_keyboard()
-            )
-            await state.set_state(OrderStates.article_input)
-            return
-            
-        # Успешное распознавание
-        await state.update_data(article=article)
-        await message.answer(f"✅ Штрих-код распознан! Артикул: {article}")
-        
-        # Переходим к выбору магазина
-        await message.answer("📌 Выберите магазин для заказа:", 
-                            reply_markup=shop_selection_keyboard())
-        await state.set_state(OrderStates.shop_selection)
-        
-    except Exception as e:
-        logging.exception("Barcode scan error")
-        await message.answer(
-            "⚠️ Произошла критическая ошибка. Попробуйте другой способ ввода.",
-            reply_markup=article_input_keyboard()
-        )
-        await state.set_state(OrderStates.article_input)
 
 @dp.message(OrderStates.shop_selection)
 async def process_shop_selection(message: types.Message, state: FSMContext):
@@ -1367,15 +1189,8 @@ async def process_info_request(message: types.Message, state: FSMContext):
         # Обработка ввода
         article = None
         if message.photo:
-            # Логирование попытки обработки фото
-            logging.info(f"Обработка фото для запроса информации (пользователь: {user_id})")
-            
-            # Обработка фото
-            photo = message.photo[-1]
-            article, error = await process_barcode_image(photo)
-            if error:
-                await message.answer(error)
-                return
+            await message.answer("📸 Распознавание штрих-кодов отключено. Введите артикул вручную.")
+            return
         else:
             # Логирование ручного ввода
             logging.info(f"Ручной ввод артикула: {message.text} (пользователь: {user_id})")
@@ -1846,6 +1661,7 @@ async def delete_task_start(message: types.Message, state: FSMContext):
     )
     await state.set_state(TaskStates.delete_task)
 
+
 @dp.message(TaskStates.delete_task)
 async def delete_task_handler(message: types.Message, state: FSMContext):
     task_id = message.text.strip()
@@ -1879,9 +1695,11 @@ async def send_all_tasks(message: types.Message, state: FSMContext):
     
     await message.answer(
         "Выберите аудиторию:",
-        reply_markup=create_keyboard(["Всем", "По магазинам", "Вручную", "🔙 Назад"], (2, 2))
+        reply_markup=create_keyboard(["Всем", "По магазинам", "По должности", "Вручную", "🔙 Назад"], (2, 2, 1))
+
     )
     await state.set_state(TaskStates.select_audience)
+
 
 @dp.message(TaskStates.select_action, F.text == "Выбрать задачи")
 async def select_action_to_send(message: types.Message, state: FSMContext):
@@ -1895,7 +1713,7 @@ async def select_action_to_send(message: types.Message, state: FSMContext):
     )
     await state.set_state(TaskStates.input_task_ids)
 
-@dp.message(TaskStates.input_task_ids)
+
 @dp.message(TaskStates.input_task_ids)
 async def process_task_ids(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -1944,6 +1762,7 @@ async def process_task_ids(message: types.Message, state: FSMContext):
     )
     await state.set_state(TaskStates.select_audience)
 
+
 @dp.message(TaskStates.select_audience, F.text == "Всем пользователям")
 async def send_to_all(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -1978,6 +1797,46 @@ async def send_to_all(message: types.Message, state: FSMContext):
     )
     await state.clear()
 
+
+@dp.message(TaskStates.select_audience, F.text == "По должности")
+async def ask_for_position_filter(message: types.Message, state: FSMContext):
+    await message.answer("👥 Введите должность:", reply_markup=cancel_keyboard())
+    await state.set_state(TaskStates.input_position)
+
+
+@dp.message(TaskStates.input_position)
+async def process_position_filter(message: types.Message, state: FSMContext):
+    position_input = message.text.strip().lower()
+    data = await state.get_data()
+    all_tasks = data.get("selected_tasks")
+
+    try:
+        users_data = pickle.loads(cache.get("users_data", b"[]"))
+        matched_user_ids = []
+
+        for user in users_data:
+            if str(user.get("Должность", "")).strip().lower() == position_input:
+                user_id = str(user.get("ID пользователя", "")).strip()
+                if user_id:
+                    matched_user_ids.append(user_id)
+
+        if not matched_user_ids:
+            await message.answer("❌ Пользователи с такой должностью не найдены. Попробуйте другую.")
+            return
+
+        await state.update_data(user_ids=matched_user_ids)
+        await message.answer(
+            f"✅ Найдено {len(matched_user_ids)} пользователей с должностью: {position_input}\n"
+            "Нажмите, чтобы отправить задачи.",
+            reply_markup=create_keyboard(["📤 Подтвердить отправку", "❌ Отмена"], (2,))
+        )
+        await state.set_state(TaskStates.confirmation)
+
+    except Exception as e:
+        logging.error(f"Ошибка фильтрации по должности: {str(e)}")
+        await message.answer("❌ Ошибка фильтрации пользователей")
+        await state.clear()
+
 @dp.message(TaskStates.select_audience, F.text == "Вручную ввести ID")
 async def ask_for_manual_ids(message: types.Message, state: FSMContext):
     await message.answer(
@@ -1985,6 +1844,7 @@ async def ask_for_manual_ids(message: types.Message, state: FSMContext):
         reply_markup=cancel_keyboard()
     )
     await state.set_state(TaskStates.input_manual_ids)
+
 
 async def send_selected_tasks(selected_tasks: dict, user_ids: list):
     results = {"success": 0, "failed": 0}
@@ -2004,6 +1864,7 @@ async def send_selected_tasks(selected_tasks: dict, user_ids: list):
             logging.error(f"Error sending to {user_id}: {str(e)}")
     
     return results
+
 
 @dp.message(TaskStates.input_manual_ids)
 async def send_to_manual_ids(message: types.Message, state: FSMContext):
@@ -2061,29 +1922,34 @@ async def cancel_sending(message: types.Message, state: FSMContext):
 async def mark_task_done(callback: types.CallbackQuery):
     task_id = callback.data.split(":")[1]
     user_id = callback.from_user.id
+    sheet = get_tasks_sheet()
     
     try:
-        sheet = get_tasks_sheet()
         cell = sheet.find(task_id)
         if not cell:
-            await callback.answer("❌ Задача не найдена!")
+            await callback.answer("❌ Задача не найдена")
+            return
+
+        # Получаем и обновляем список пользователей
+        statuses = json.loads(sheet.cell(cell.row, 8).value)
+        if user_id in statuses.get("user_ids", []):
+            await callback.answer("✅ Уже отмечено")
             return
         
-        # Получаем текущие статусы
-        statuses = json.loads(sheet.cell(cell.row, 8).value)  # Колонка 8 - "Статусы"
-        
-        # Добавляем пользователя если его еще нет
-        if str(user_id) not in statuses["user_ids"]:
-            statuses["user_ids"].append(str(user_id))
-            sheet.update_cell(cell.row, 8, json.dumps(statuses))
-            await callback.answer("✅ Задача отмечена выполненной!")
-        else:
-            await callback.answer("✔️ Вы уже отмечали эту задачу")
-            
-    except Exception as e:
-        logging.error(f"Ошибка при отметке задачи: {str(e)}")
-        await callback.answer("❌ Ошибка сервера")
+        statuses["user_ids"].append(user_id)
+        sheet.update_cell(cell.row, 8, json.dumps(statuses))
 
+        await callback.answer("✅ Отмечено как выполнено")
+
+        # Обновим inline кнопку
+        new_markup = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="✔️ Выполнено", callback_data="done", disabled=True)]
+        ])
+        await callback.message.edit_reply_markup(reply_markup=new_markup)
+
+    except Exception as e:
+        logging.error(f"Ошибка отметки задачи: {str(e)}")
+        await callback.answer("❌ Ошибка выполнения")
 
 async def check_deadlines():
     while True:
@@ -2108,6 +1974,38 @@ async def check_deadlines():
         
         await asyncio.sleep(86400)  # Проверка раз в сутки
 
+
+@dp.message(Command("mytasks"))
+async def handle_mytasks(message: types.Message):
+    user_id = message.from_user.id
+    sheet = get_tasks_sheet()
+    
+    try:
+        rows = sheet.get_all_records()
+        pending_tasks = []
+        
+        for row in rows:
+            task_id = row["ID задачи"]
+            statuses = json.loads(row.get("Статусы", '{"user_ids": []}'))
+            if user_id not in statuses.get("user_ids", []):
+                pending_tasks.append((task_id, row))
+
+        if not pending_tasks:
+            await message.answer("✅ У вас нет незавершённых задач")
+            return
+        
+        for task_id, task in pending_tasks[:5]:  # ограничим до 5
+            msg = format_task_message(task_id, task)
+            await message.answer(
+                msg,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=get_task_keyboard(task_id)
+            )
+
+    except Exception as e:
+        logging.error(f"Ошибка в /mytasks: {str(e)}")
+        await message.answer("❌ Не удалось загрузить задачи")
+        
 
 @dp.message(TaskStates.select_action, F.text == "Статистика выполнения")
 async def show_stats_menu(message: types.Message, state: FSMContext):
