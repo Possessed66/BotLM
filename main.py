@@ -1692,7 +1692,22 @@ async def send_tasks_menu(message: types.Message, state: FSMContext):
 @dp.message(TaskStates.select_action, F.text == "Отправить все")
 async def send_all_tasks(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    await state.update_data(selected_tasks=data['tasks'])  # Выбираем все задачи
+    tasks = data.get("tasks")
+
+    if not tasks:
+        await message.answer("❌ Нет задач для отправки.")
+        await state.clear()
+        return
+
+    await state.update_data(selected_tasks=tasks)
+
+    await message.answer(
+        f"✅ Выбраны все задачи: {len(tasks)} шт.\nВыберите аудиторию:",
+        reply_markup=create_keyboard(
+            ["Всем пользователям", "По должности", "Вручную", "🔙 Назад"],
+            (2, 2)
+        )
+    )
     await state.set_state(TaskStates.select_audience)
 
 
@@ -1971,22 +1986,27 @@ async def cancel_task_dispatch(message: types.Message, state: FSMContext):
 async def handle_mytasks(message: types.Message):
     user_id = message.from_user.id
     sheet = get_tasks_sheet()
-    
+
     try:
         rows = sheet.get_all_records()
         pending_tasks = []
-        
+
         for row in rows:
-            task_id = row["ID задачи"]
-            statuses = json.loads(row.get("Статусы", '{"user_ids": []}'))
+            task_id = row.get("ID задачи")
+            statuses_raw = row.get("Статусы", "{}")
+            try:
+                statuses = json.loads(statuses_raw)
+            except json.JSONDecodeError:
+                statuses = {"user_ids": []}
+
             if user_id not in statuses.get("user_ids", []):
-                pending_tasks.append((task_id, row))
+                pending_tasks.append((task_id, normalize_task_row(task_id, row)))
 
         if not pending_tasks:
-            await message.answer("✅ У вас нет незавершённых задач")
+            await message.answer("✅ У вас нет незавершённых задач.")
             return
-        
-        for task_id, task in pending_tasks[:5]:  # ограничим до 5
+
+        for task_id, task in pending_tasks[:5]:  # показываем максимум 5
             msg = format_task_message(task_id, task)
             await message.answer(
                 msg,
@@ -1996,7 +2016,7 @@ async def handle_mytasks(message: types.Message):
 
     except Exception as e:
         logging.error(f"Ошибка в /mytasks: {str(e)}")
-        await message.answer("❌ Не удалось загрузить задачи")
+        await message.answer("❌ Не удалось загрузить ваши задачи.")
         
 
 @dp.message(TaskStates.select_action, F.text == "Статистика выполнения")
