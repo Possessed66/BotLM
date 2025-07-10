@@ -1803,7 +1803,7 @@ async def process_position_filter(message: types.Message, state: FSMContext):
         await state.clear()
 
 
-@dp.message(TaskStates.select_audience, F.text == "Вручную ввести ID")
+@dp.message(TaskStates.select_audience, F.text == "Вручную")
 async def ask_for_manual_ids(message: types.Message, state: FSMContext):
     await message.answer(
         "Введите ID пользователей через запятую:",
