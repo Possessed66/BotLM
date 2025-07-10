@@ -329,6 +329,7 @@ class TaskStates(StatesGroup):
     select_audience = State() # Выбор аудитории
     input_position = State()
     input_manual_ids = State() # Ввод ID пользователей
+    confirmation = State()
     
     # Состояния для статистики
     view_stats = State()     # Просмотр статистики
@@ -1692,12 +1693,6 @@ async def send_tasks_menu(message: types.Message, state: FSMContext):
 async def send_all_tasks(message: types.Message, state: FSMContext):
     data = await state.get_data()
     await state.update_data(selected_tasks=data['tasks'])  # Выбираем все задачи
-    
-    await message.answer(
-        "Выберите аудиторию:",
-        reply_markup=create_keyboard(["Всем", "По магазинам", "По должности", "Вручную", "🔙 Назад"], (2, 2, 1))
-
-    )
     await state.set_state(TaskStates.select_audience)
 
 
@@ -1758,44 +1753,20 @@ async def process_task_ids(message: types.Message, state: FSMContext):
     await message.answer(
         f"✅ Готово к отправке: {len(valid_tasks)} задач\n"
         "Выберите аудиторию:",
-        reply_markup=create_keyboard(["Всем", "По магазинам", "Вручную", "🔙 Назад"], (2, 2))
+        reply_markup=create_keyboard(["Всем пользователям","По должности", "Вручную", "🔙 Назад"], (2, 2))
     )
     await state.set_state(TaskStates.select_audience)
 
 
 @dp.message(TaskStates.select_audience, F.text == "Всем пользователям")
-async def send_to_all(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    tasks = data['tasks']
-    users = users_sheet.col_values(1)  # Все ID из Google Sheets
-    
-    success = 0
-    failed = 0
-    
-    for user_id in users:
-        try:
-            for task_id, task in tasks.items():
-                task_msg = format_task_message(task_id, task)
-                await bot.send_message(
-                    user_id,
-                    task_msg,
-                    parse_mode=ParseMode.MARKDOWN,
-                    reply_markup=get_task_keyboard(task_id)
-                )
-            success += 1
-            logging.info(f"Успешно отправлено пользователю {user_id}")
-        except Exception as e:
-            failed += 1
-            logging.error(f"Ошибка отправки {user_id}: {str(e)}")
-    
+async def send_to_all_users(message: types.Message, state: FSMContext):
+    user_ids = users_sheet.col_values(1)[1:]
+    await state.update_data(user_ids=user_ids)
     await message.answer(
-        f"📊 Результат рассылки:\n"
-        f"• Всего получателей: {len(users)}\n"
-        f"• Успешно: {success}\n"
-        f"• Не удалось: {failed}",
-        reply_markup=tasks_admin_keyboard()
+        f"👥 Пользователей: {len(user_ids)}\n📤 Подтвердите отправку задач",
+        reply_markup=create_keyboard(["📤 Подтвердить отправку", "❌ Отмена"], (2,))
     )
-    await state.clear()
+    await state.set_state(TaskStates.confirmation)
 
 
 @dp.message(TaskStates.select_audience, F.text == "По должности")
@@ -1807,35 +1778,30 @@ async def ask_for_position_filter(message: types.Message, state: FSMContext):
 @dp.message(TaskStates.input_position)
 async def process_position_filter(message: types.Message, state: FSMContext):
     position_input = message.text.strip().lower()
-    data = await state.get_data()
-    all_tasks = data.get("selected_tasks")
-
     try:
         users_data = pickle.loads(cache.get("users_data", b"[]"))
-        matched_user_ids = []
-
-        for user in users_data:
-            if str(user.get("Должность", "")).strip().lower() == position_input:
-                user_id = str(user.get("ID пользователя", "")).strip()
-                if user_id:
-                    matched_user_ids.append(user_id)
+        matched_user_ids = [
+            str(u["ID пользователя"])
+            for u in users_data
+            if str(u.get("Должность", "")).strip().lower() == position_input
+        ]
 
         if not matched_user_ids:
-            await message.answer("❌ Пользователи с такой должностью не найдены. Попробуйте другую.")
+            await message.answer("❌ Пользователи с такой должностью не найдены.")
             return
 
         await state.update_data(user_ids=matched_user_ids)
         await message.answer(
-            f"✅ Найдено {len(matched_user_ids)} пользователей с должностью: {position_input}\n"
-            "Нажмите, чтобы отправить задачи.",
+            f"✅ Найдено: {len(matched_user_ids)} пользователей\n📤 Подтвердите отправку задач",
             reply_markup=create_keyboard(["📤 Подтвердить отправку", "❌ Отмена"], (2,))
         )
         await state.set_state(TaskStates.confirmation)
 
     except Exception as e:
-        logging.error(f"Ошибка фильтрации по должности: {str(e)}")
-        await message.answer("❌ Ошибка фильтрации пользователей")
+        logging.error(f"Ошибка при фильтрации по должности: {str(e)}")
+        await message.answer("❌ Ошибка обработки должности")
         await state.clear()
+
 
 @dp.message(TaskStates.select_audience, F.text == "Вручную ввести ID")
 async def ask_for_manual_ids(message: types.Message, state: FSMContext):
@@ -1867,41 +1833,20 @@ async def send_selected_tasks(selected_tasks: dict, user_ids: list):
 
 
 @dp.message(TaskStates.input_manual_ids)
-async def send_to_manual_ids(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    tasks = data['tasks']
+async def handle_manual_user_ids(message: types.Message, state: FSMContext):
     user_ids = [uid.strip() for uid in message.text.split(",") if uid.strip().isdigit()]
-    
+
     if not user_ids:
         await message.answer("❌ Нет валидных ID. Попробуйте снова.")
         return
-    
-    results = {"success": 0, "failed": 0}
-    
-    for user_id in user_ids:
-        try:
-            for task_id, task in tasks.items():
-                task_msg = format_task_message(task_id, task)
-                await bot.send_message(
-                    user_id,
-                    task_msg,
-                    parse_mode=ParseMode.MARKDOWN,
-                    reply_markup=get_task_keyboard(task_id)
-                )
-            results["success"] += 1
-            logging.info(f"Успешно отправлено пользователю {user_id}")
-        except Exception as e:
-            results["failed"] += 1
-            logging.error(f"Ошибка отправки {user_id}: {str(e)}")
-    
+
+    await state.update_data(user_ids=user_ids)
+
     await message.answer(
-        f"📊 Результат рассылки:\n"
-        f"• Получателей: {len(user_ids)}\n"
-        f"• Успешно: {results['success']}\n"
-        f"• Не удалось: {results['failed']}",
-        reply_markup=tasks_admin_keyboard()
+        f"✅ Указано ID: {len(user_ids)}\n📤 Подтвердите отправку задач.",
+        reply_markup=create_keyboard(["📤 Подтвердить отправку", "❌ Отмена"], (2,))
     )
-    await state.clear()
+    await state.set_state(TaskStates.confirmation)
 
 
 @dp.message(F.text == "🔙 Назад")
@@ -1973,6 +1918,53 @@ async def check_deadlines():
                         continue
         
         await asyncio.sleep(86400)  # Проверка раз в сутки
+
+
+@dp.message(TaskStates.confirmation, F.text == "📤 Подтвердить отправку")
+async def confirm_task_dispatch(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    user_ids = data.get("user_ids", [])
+    selected_tasks = data.get("selected_tasks", {})
+
+    if not user_ids or not selected_tasks:
+        await message.answer("❌ Нет получателей или задач для отправки.")
+        await state.clear()
+        return
+
+    success = 0
+    failed = 0
+
+    for uid in user_ids:
+        for task_id, task in selected_tasks.items():
+            try:
+                await bot.send_message(
+                    int(uid),
+                    format_task_message(task_id, task),
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=get_task_keyboard(task_id)
+                )
+                success += 1
+                await asyncio.sleep(0.1)  # защитная пауза
+            except Exception as e:
+                logging.warning(f"Ошибка отправки задачи {task_id} пользователю {uid}: {e}")
+                failed += 1
+
+    await message.answer(
+        f"📊 Отправка завершена:\n"
+        f"• Пользователей: {len(user_ids)}\n"
+        f"• Задач каждому: {len(selected_tasks)}\n"
+        f"• Успешных отправок: {success}\n"
+        f"• Ошибок: {failed}",
+        reply_markup=tasks_admin_keyboard()
+    )
+
+    await state.clear()
+
+
+@dp.message(TaskStates.confirmation, F.text == "❌ Отмена")
+async def cancel_task_dispatch(message: types.Message, state: FSMContext):
+    await message.answer("❌ Отправка отменена", reply_markup=tasks_admin_keyboard())
+    await state.clear()
 
 
 @dp.message(Command("mytasks"))
