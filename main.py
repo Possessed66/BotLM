@@ -505,6 +505,14 @@ async def log_user_activity(user_id: str, command: str, event_type: str = "comma
 
 
 ##Задачи\\\\\\\\\\\\\\\\\
+def normalize_task_row(task_id: str, row: dict) -> dict:
+    return {
+        "text": row.get("Текст", ""),
+        "creator_initials": row.get("Создал", ""),
+        "deadline": row.get("Дедлайн", ""),
+        "link": row.get("Ссылка", ""),
+        "statuses": row.get("Статусы", ""),
+    }
 
 
 def get_tasks_sheet():
