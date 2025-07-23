@@ -33,15 +33,15 @@ def prepare_db():
 
 
 def get_sheet_data():
-    service_json_raw = os.getenv("GOOGLE_CREDS_JSON")
+    service_json_raw = os.getenv("GOOGLE_CREDENTIALS")
 
     if not service_json_raw:
-        raise RuntimeError("❌ GOOGLE_CREDS_JSON не найден в secrets.env")
+        raise RuntimeError("❌ GOOGLE_CREDENTIALS не найден в secrets.env")
 
     try:
         service_json = json.loads(service_json_raw)
     except json.JSONDecodeError:
-        raise RuntimeError("❌ GOOGLE_CREDS_JSON содержит неверный JSON")
+        raise RuntimeError("❌ GOOGLE_CREDENTIALS содержит неверный JSON")
 
     scope = [
         "https://spreadsheets.google.com/feeds",
