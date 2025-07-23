@@ -23,7 +23,7 @@ except KeyError as e:
     raise RuntimeError(f"Отсутствует обязательная переменная окружения: {e}")
 
 # Путь к файлу базы данных SQLite (должен быть в той же папке)
-DB_PATH = os.path.join(os.path.dirname(__file__), 'products.db')
+DB_PATH = os.path.join(os.path.dirname(__file__), 'articles.db')
 
 # Имя листа с гамма-кластером (нужно для определения уникальных магазинов)
 GAMMA_CLUSTER_SHEET_NAME = "Гамма кластер"
