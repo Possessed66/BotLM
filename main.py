@@ -679,7 +679,7 @@ async def get_product_info(article: str, shop: str) -> Optional[Dict[str, Any]]:
         supplier_data = await get_supplier_data_from_db(supplier_id, shop)
         
         # === 3. Обработка случая, если поставщик не найден ===
-        if not supplier_
+        if not supplier_data:
             logging.info("Поставщик не найден в БД, используется резервная информация")
             return {
                 'Артикул': article,
