@@ -750,7 +750,7 @@ async def get_product_data_from_db(article: str, shop: str) -> Optional[Dict[str
             cursor.execute("""
                 SELECT "Магазин", "Отдел", "Артикул", "Название", "Гамма", 
                        "Номер осн. пост.", "Название осн. пост.", "Топ в магазине"
-                FROM gamma_cluster 
+                FROM articles
                 WHERE "Артикул" = ? AND "Магазин" = ?
             """, (article, shop))
             
@@ -765,7 +765,7 @@ async def get_product_data_from_db(article: str, shop: str) -> Optional[Dict[str
             cursor.execute("""
                 SELECT "Магазин", "Отдел", "Артикул", "Название", "Гамма", 
                        "Номер осн. пост.", "Название осн. пост.", "Топ в магазине"
-                FROM gamma_cluster 
+                FROM articles
                 WHERE "Артикул" = ?
                 LIMIT 1
             """, (article,))
