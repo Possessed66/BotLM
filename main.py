@@ -654,7 +654,7 @@ async def get_product_info(article: str, shop: str) -> Optional[Dict[str, Any]]:
         # === 1. Получение данных товара из SQLite ===
         product_data = await get_product_data_from_db(article, shop)
         
-        if not product_
+        if not product_data:
             logging.warning(f"Товар не найден в БД: артикул={article}, магазин={shop}")
             return None
             
