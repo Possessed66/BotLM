@@ -68,11 +68,15 @@ def import_data(records, conn):
         gamma = str(row["Гамма"]).strip()
         supplier_code = str(row["Номер осн. пост."]).strip()
         supplier_name = str(row["Название осн. пост."]).strip()
-        is_top = 1 if str(row.get("Топ в магазине", "")).strip() == "1" else 0
+        try:
+            is_top_raw = str(row.get("Топ в магазине", "0")).strip()
+            is_top_store = int(is_top_raw) if is_top_raw.isdigit() else 0
+        except (ValueError, TypeError):
+            is_top_store = 0
 
         prepared.append((
             full_key, article_code, store_number, department,
-            name, gamma, supplier_code, supplier_name, is_top
+            name, gamma, supplier_code, supplier_name, is_top_store
         ))
 
     conn.executemany(f"""
