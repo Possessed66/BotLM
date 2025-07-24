@@ -2166,27 +2166,35 @@ async def ask_for_task_details(message: types.Message, state: FSMContext):
     await message.answer("Введите ID задачи для детализации:", reply_markup=cancel_keyboard())
     await state.set_state(TaskStates.input_task_id_for_details)
 
+
 @dp.message(TaskStates.input_task_id_for_details)
 async def show_task_details(message: types.Message, state: FSMContext):
-    task_id = message.text.strip()
+    # 1. Нормализуем введенный ID задачи к строке
+    input_task_id = str(message.text.strip()) 
     data = await state.get_data()
-    tasks = data['tasks']
+    tasks = data['tasks'] 
     
-    if task_id not in tasks:
+    # 2. Нормализуем ключи словаря tasks к строкам для сравнения
+    # Создаем временный словарь с ключами в виде строк
+    string_keyed_tasks = {str(k): v for k, v in tasks.items()}
+    
+    # 3. Проверяем наличие задачи с нормализованным ID
+    if input_task_id not in string_keyed_tasks:
         await message.answer("❌ Задача не найдена.")
         return
     
-    task = tasks[task_id]
+    # 4. Получаем данные задачи по нормализованному ID
+    task = string_keyed_tasks[input_task_id] 
     completed_users = task['completed_by']
     
-    # Получаем имена выполнивших
+    # 5. Получаем имена выполнивших
     user_names = []
     for user_id in completed_users:
         initials = await get_user_initials(user_id)
         user_names.append(f"{initials} (ID: {user_id})")
     
     response = (
-        f"📋 Детали задачи {task_id}:\n"
+        f"📋 Детали задачи {input_task_id}:\n" # Используем нормализованный ID
         f"Текст: {task['text']}\n"
         f"Выполнили ({len(completed_users)}):\n"
     )
