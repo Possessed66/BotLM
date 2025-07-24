@@ -808,15 +808,18 @@ async def get_supplier_data_from_db(supplier_id: str, shop: str) -> Optional[Dic
             cursor = conn.cursor()
             # Формируем имя таблицы поставщиков (как в Google Sheets)
             supplier_table_name = f"Даты выходов заказов {shop}"
-            
-            # Запрос данных поставщика
-            # Используем двойные кавычки для названий столбцов с пробелами
-            query = f""
+
+            # Определяем части SQL-запроса
+            select_clause = '''
                 SELECT "Номер осн. пост.", "Название осн. пост.", "Срок доставки в магазин",
                        "День выхода заказа", "День выхода заказа 2", "День выхода заказа 3"
-                FROM "{supplier_table_name}"
-                WHERE "Номер осн. пост." = ?
-            ""
+            '''
+            from_clause = f'FROM "{supplier_table_name}"'
+            where_clause = 'WHERE "Номер осн. пост." = ?'
+
+            # Собираем полный запрос
+            query = f"{select_clause} {from_clause} {where_clause}"
+            
             cursor.execute(query, (supplier_id,))
             
             row = cursor.fetchone()
