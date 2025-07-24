@@ -12,6 +12,8 @@ import threading
 import tracemalloc
 import objgraph
 import psutil
+import sqlite3
+from contextlib import contextmanager
 from aiogram.exceptions import TelegramBadRequest
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
@@ -34,6 +36,28 @@ from cachetools import LRUCache
 
 # ===================== ГЛОБАЛЬНАЯ ОБРАБОТКА ОШИБОК =====================
 from aiogram.fsm.storage.base import StorageKey
+
+@contextmanager
+def get_db_connection():
+    """Контекстный менеджер для безопасного подключения к SQLite."""
+    conn = None
+    try:
+        # Проверка существования файла БД
+        if not os.path.exists(DB_PATH):
+             # Можно добавить логирование ошибки, если файл обязателен
+             logging.critical(f"❌ Файл базы данных не найден: {DB_PATH}")
+             raise FileNotFoundError(f"Файл базы данных не найден: {DB_PATH}")
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row  # Позволяет обращаться к колонкам по имени
+        yield conn
+    except sqlite3.Error as e:
+        logging.error(f"Ошибка подключения к БД: {e}")
+        if conn:
+            conn.rollback()
+        raise
+    finally:
+        if conn:
+            conn.close()
 
 async def global_error_handler(event: types.ErrorEvent, bot: Bot):
     """Централизованный обработчик всех необработанных исключений"""
@@ -225,13 +249,16 @@ def profile_memory(func):
     return wrapper
 
 # ===================== КОНФИГУРАЦИЯ =====================
+
+DB_PATH = os.path.join(os.path.dirname(__file__), 'articles.db')
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
 )
 
 # Сервисный режим
-SERVICE_MODE = False
+SERVICE_MODE = True
 ADMINS = [122086799, 5183727015]
 
 # Кэширование
@@ -255,7 +282,6 @@ SPREADSHEET_NAME = "ShopBotData"
 STATSS_SHEET_NAME = "Статистика_Пользователей"
 ORDERS_SPREADSHEET_NAME = "Копия Заказы МЗ 0.2"
 USERS_SHEET_NAME = "Пользователи"
-GAMMA_CLUSTER_SHEET = "Гамма кластер"
 TASKS_SHEET_NAME = "Задачи"
 LOGS_SHEET = "Логи"
 MAX_IMAGE_SIZE = 2_000_000
@@ -579,8 +605,7 @@ async def delete_task(task_id: str, user_id: int) -> bool:
     return True
 
 # =============================ПАРСЕР=================================
-
-
+  
 def parse_supplier_data(record: dict) -> Dict[str, Any]:
     """Парсинг данных поставщика"""
     order_days = []
@@ -622,72 +647,55 @@ def calculate_delivery_date(supplier_data: dict) -> Tuple[str, str]:
 
 @profile_memory
 async def get_product_info(article: str, shop: str) -> Optional[Dict[str, Any]]:
-    """Получение информации о товаре с расширенным логированием"""
+    """Получение информации о товаре с расширенным логированием, используя SQLite"""
     try:
         logging.info(f"🔍 Поиск товара: артикул={article}, магазин={shop}")
         
-        # Проверяем кэш gamma_index
-        if "gamma_index" not in cache:
-            logging.error("❌ gamma_index отсутствует в кэше!")
+        # === 1. Получение данных товара из SQLite ===
+        product_data = await get_product_data_from_db(article, shop)
+        
+        if not product_
+            logging.warning(f"Товар не найден в БД: артикул={article}, магазин={shop}")
             return None
-        
-        try:
-            gamma_index = pickle.loads(cache["gamma_index"])
-            logging.info(f"Размер gamma_index: {len(gamma_index)} записей")
-        except Exception as e:
-            logging.error(f"Ошибка загрузки gamma_index: {str(e)}")
-            return None
-        
-        # Формируем ключ для поиска
-        lookup_key = (str(article).strip(), str(shop).strip())
-        logging.info(f"Ключ поиска: {lookup_key}")
-        
-        # Поиск в индексе
-        product_data = gamma_index.get(lookup_key)
-        
-        if not product_data:
-            logging.warning(f"Товар не найден по ключу: {lookup_key}")
-            # Попробуем найти без магазина (только по артикулу)
-            found = False
-            for key, data in gamma_index.items():
-                if key[0] == lookup_key[0]:
-                    logging.info(f"Найден альтернативный магазин: {key[1]} - {data['Название']}")
-                    found = True
-            if not found:
-                logging.warning("Товар не найден даже без привязки к магазину")
-            return None
-        
-        logging.info(f"Найден товар: {product_data['Название']}")
-        
-        # Получаем данные поставщика
+            
+        logging.info(f"Найден товар: {product_data.get('Название', 'Неизвестно')}")
+
+        # === 2. Получение данных поставщика из SQLite ===
         supplier_id = str(product_data.get("Номер осн. пост.", "")).strip()
         logging.info(f"ID поставщика: {supplier_id}")
         
-        supplier_list = get_supplier_dates_sheet(shop)
-        logging.info(f"Получено {len(supplier_list)} поставщиков для магазина {shop}")
+        if not supplier_id:
+             # Если поставщик не указан, возвращаем базовую информацию
+             logging.info("Номер поставщика отсутствует, возвращаю базовую информацию")
+             return {
+                 'Артикул': article,
+                 'Название': product_data.get('Название', ''),
+                 'Отдел': str(product_data.get('Отдел', '')),
+                 'Магазин': shop,
+                 'Поставщик': 'Товар РЦ', # Или другое значение по умолчанию
+                 'Топ в магазине': product_data.get('Топ в магазине', '0')
+             }
+
+        supplier_data = await get_supplier_data_from_db(supplier_id, shop)
         
-        # Поиск поставщика
-        supplier_data = None
-        for item in supplier_list:
-            if str(item.get("Номер осн. пост.", "")).strip() == supplier_id:
-                supplier_data = item
-                break
-        
-        if not supplier_data:
-            logging.info("Поставщик не найден, используется резервная информация")
+        # === 3. Обработка случая, если поставщик не найден ===
+        if not supplier_
+            logging.info("Поставщик не найден в БД, используется резервная информация")
             return {
                 'Артикул': article,
                 'Название': product_data.get('Название', ''),
                 'Отдел': str(product_data.get('Отдел', '')),
                 'Магазин': shop,
-                'Поставщик': 'Товар РЦ',
+                'Поставщик': 'Товар РЦ', # Или product_data.get('Название осн. пост.', 'Не указано').strip()
                 'Топ в магазине': product_data.get('Топ в магазине', '0')
             }
-        
-        # Парсинг данных поставщика
+
+        # === 4. Парсинг данных поставщика и расчет дат ===
+        # Парсинг данных поставщика (используем существующую функцию)
         parsed_supplier = parse_supplier_data(supplier_data)
         order_date, delivery_date = calculate_delivery_date(parsed_supplier)
         
+        # === 5. Формирование итогового результата ===
         result = {
             'Артикул': article,
             'Название': product_data.get('Название', ''),
@@ -702,25 +710,10 @@ async def get_product_info(article: str, shop: str) -> Optional[Dict[str, Any]]:
         
         logging.info(f"Успешно получена информация: {result}")
         return result
-    
+        
     except Exception as e:
         logging.exception(f"Критическая ошибка в get_product_info: {str(e)}")
         return None
-
-def get_supplier_dates_sheet(shop_number: str) -> list:
-    """Получение данных поставщика с кэшированием"""
-    cache_key = f"supplier_{shop_number}"
-    if cache_key in cache:
-        return pickle.loads(cache[cache_key])
-    
-    try:
-        sheet = orders_spreadsheet.worksheet(f"Даты выходов заказов {shop_number}")
-        data = sheet.get_all_records()
-        cache[cache_key] = pickle.dumps(data)
-        return data
-    except Exception as e:
-        logging.error(f"Ошибка получения данных поставщика: {str(e)}")
-        return []
 
 
 @profile_memory
@@ -731,29 +724,117 @@ async def preload_cache() -> None:
         users_records = users_sheet.get_all_records()
         cache["users_data"] = pickle.dumps(users_records)
         
-        # Кэширование товаров
-        gamma_records = gamma_cluster_sheet.get_all_records()
-        gamma_index = {}
-        
-        for item in gamma_records:
-            article = str(item.get("Артикул", "")).strip()
-            shop = str(item.get("Магазин", "")).strip()
-            if article and shop:
-                key = (article, shop)
-                gamma_index[key] = {
-                    "Название": item.get("Название", ""),
-                    "Отдел": item.get("Отдел", ""),
-                    "Номер осн. пост.": item.get("Номер осн. пост.", ""),
-                    "Топ в магазине": str(item.get("Топ в магазине", "0"))
-                }
-        
-        cache["gamma_index"] = pickle.dumps(gamma_index)
         cache_size = sum(len(pickle.dumps(v)) for v in cache.values()) / 1024 / 1024
-        logging.info(f"✅ Кэш загружен. Размер: {cache_size:.2f} MB")
-        
-        logging.info("✅ Кэш успешно загружен")
+        logging.info(f"✅ Кэш пользователей загружен. Размер: {cache_size:.2f} MB")
+        logging.info("✅ Кэш успешно загружен (без gamma_index)")
     except Exception as e:
         logging.error(f"Ошибка загрузки кэша: {str(e)}")
+
+
+async def get_product_data_from_db(article: str, shop: str) -> Optional[Dict[str, Any]]:
+    """
+    Получение данных о товаре из SQLite по артикулу и магазину.
+    
+    Args:
+        article (str): Артикул товара.
+        shop (str): Номер магазина.
+        
+    Returns:
+        Optional[Dict[str, Any]]: Словарь с данными товара или None, если не найден.
+    """
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            # Поиск с точным совпадением артикула и магазина
+            cursor.execute("""
+                SELECT "Магазин", "Отдел", "Артикул", "Название", "Гамма", 
+                       "Номер осн. пост.", "Название осн. пост.", "Топ в магазине"
+                FROM gamma_cluster 
+                WHERE "Артикул" = ? AND "Магазин" = ?
+            """, (article, shop))
+            
+            row = cursor.fetchone()
+            
+            if row:
+                # Преобразуем sqlite3.Row в словарь
+                return dict(row)
+            
+            # Если не найден, ищем в любом магазине
+            logging.info(f"Товар {article} не найден в магазине {shop}, ищу в любом магазине...")
+            cursor.execute("""
+                SELECT "Магазин", "Отдел", "Артикул", "Название", "Гамма", 
+                       "Номер осн. пост.", "Название осн. пост.", "Топ в магазине"
+                FROM gamma_cluster 
+                WHERE "Артикул" = ?
+                LIMIT 1
+            """, (article,))
+            
+            row = cursor.fetchone()
+            if row:
+                logging.info(f"Найден альтернативный магазин: {row['Магазин']} - {row['Название']}")
+                return dict(row)
+            else:
+                logging.warning(f"Товар {article} не найден даже без привязки к магазину")
+                
+            return None
+            
+    except sqlite3.Error as e:
+        logging.error(f"Ошибка запроса к БД (get_product_data_from_db): {e}")
+        return None
+    except Exception as e:
+        logging.error(f"Неожиданная ошибка в get_product_data_from_db: {e}")
+        return None
+        
+
+
+async def get_supplier_data_from_db(supplier_id: str, shop: str) -> Optional[Dict[str, Any]]:
+    """
+    Получение данных о поставщике и сроках поставки из SQLite.
+
+    Args:
+        supplier_id (str): Номер основного поставщика.
+        shop (str): Номер магазина (для выбора правильной таблицы).
+
+    Returns:
+        Optional[Dict[str, Any]]: Словарь с данными поставщика или None, если не найден.
+    """
+    # Нормализуем supplier_id
+    supplier_id = str(supplier_id).strip()
+    if not supplier_id:
+        return None
+
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            # Формируем имя таблицы поставщиков (как в Google Sheets)
+            supplier_table_name = f"Даты выходов заказов {shop}"
+            
+            # Запрос данных поставщика
+            # Используем двойные кавычки для названий столбцов с пробелами
+            query = f""
+                SELECT "Номер осн. пост.", "Название осн. пост.", "Срок доставки в магазин",
+                       "День выхода заказа", "День выхода заказа 2", "День выхода заказа 3"
+                FROM "{supplier_table_name}"
+                WHERE "Номер осн. пост." = ?
+            ""
+            cursor.execute(query, (supplier_id,))
+            
+            row = cursor.fetchone()
+            
+            if row:
+                # Преобразуем sqlite3.Row в словарь
+                return dict(row)
+            else:
+                logging.info(f"Поставщик {supplier_id} не найден в таблице '{supplier_table_name}'")
+                return None
+                
+    except sqlite3.Error as e:
+        logging.error(f"Ошибка запроса к БД (get_supplier_data_from_db): {e}")
+        return None
+    except Exception as e:
+        logging.error(f"Неожиданная ошибка в get_supplier_data_from_db: {e}")
+        return None
+
 
 # ===================== MIDDLEWARES =====================
 @dp.update.middleware()
