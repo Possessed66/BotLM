@@ -282,6 +282,7 @@ SPREADSHEET_NAME = "ShopBotData"
 STATSS_SHEET_NAME = "Статистика_Пользователей"
 ORDERS_SPREADSHEET_NAME = "Копия Заказы МЗ 0.2"
 USERS_SHEET_NAME = "Пользователи"
+GAMMA_CLUSTER_SHEET = "Гамма кластер"
 TASKS_SHEET_NAME = "Задачи"
 LOGS_SHEET = "Логи"
 MAX_IMAGE_SIZE = 2_000_000
