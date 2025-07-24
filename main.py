@@ -258,7 +258,7 @@ logging.basicConfig(
 )
 
 # Сервисный режим
-SERVICE_MODE = True
+SERVICE_MODE = False
 ADMINS = [122086799, 5183727015]
 
 # Кэширование
@@ -1708,7 +1708,7 @@ async def disable_service_mode(message: types.Message):
 
 #============================Задачи========================
 def format_task_message(task_id: str, task: dict) -> str:
-    deadline = task.get('Дедлайн')
+    deadline = task.get('deadline')
     deadline_text = f"⏰ Дедлайн: {deadline}" if deadline else "⏳ Без дедлайна"
     
     return (
