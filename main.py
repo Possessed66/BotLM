@@ -732,9 +732,10 @@ async def preload_cache() -> None:
         logging.error(f"Ошибка загрузки кэша: {str(e)}")
 
 
+# === Заменить полностью функцию get_product_data_from_db ===
 async def get_product_data_from_db(article: str, shop: str) -> Optional[Dict[str, Any]]:
     """
-    Получение данных о товаре из SQLite по составному ключу (артикул + магазин).
+    Получение данных о товаре из SQLite по составному ключу (full_key).
 
     Args:
         article (str): Артикул товара.
@@ -745,50 +746,70 @@ async def get_product_data_from_db(article: str, shop: str) -> Optional[Dict[str
     """
     try:
         # Формируем составной ключ для точного поиска
-        composite_key_exact = f"{article}{shop}"
-        logging.info(f"🔍 Поиск по составному ключу: '{composite_key_exact}'")
+        full_key_exact = f"{article}{shop}"
+        logging.info(f"🔍 Поиск по full_key: '{full_key_exact}'")
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
             
-            # 1. Поиск с точным совпадением по составному ключу
+            # 1. Поиск с точным совпадением по full_key
             cursor.execute("""
-                SELECT "Ключ", "Магазин", "Отдел", "Артикул", "Название", "Гамма", 
-                       "Номер осн. пост.", "Название осн. пост.", "Топ в магазине"
+                SELECT full_key, store_number, department, article_code, name, gamma, 
+                       supplier_code, supplier_name, is_top_store
                 FROM articles 
-                WHERE "Ключ" = ?
-            """, (composite_key_exact,))
+                WHERE full_key = ?
+            """, (full_key_exact,))
             
             row = cursor.fetchone()
             
             if row:
                 # Преобразуем sqlite3.Row в словарь
-                logging.info(f"✅ Найден товар по точному ключу '{composite_key_exact}': {row['Название']}")
-                return dict(row)
+                logging.info(f"✅ Найден товар по точному full_key '{full_key_exact}': {row['name']}")
+                # Отображаем имена столбцов из БД в имена, ожидаемые get_product_info
+                return {
+                    "Магазин": row['store_number'],
+                    "Отдел": row['department'],
+                    "Артикул": row['article_code'],
+                    "Название": row['name'],
+                    "Гамма": row['gamma'],
+                    "Номер осн. пост.": row['supplier_code'],
+                    "Название осн. пост.": row['supplier_name'],
+                    "Топ в магазине": str(row['is_top_store'])
+                }
             
-            # 2. Если не найден по точному ключу, ищем по артикулу в начале ключа
-            # Формируем шаблон поиска: ключ начинается с артикула
+            # 2. Если не найден по точному ключу, ищем по артикулу в начале full_key
+            # Формируем шаблон поиска: full_key начинается с артикула
             article_prefix = f"{article}%"
-            logging.info(f"Товар с ключом '{composite_key_exact}' не найден, ищу по артикулу '{article}' в начале ключа...")
+            logging.info(f"Товар с full_key '{full_key_exact}' не найден, ищу по артикулу '{article}' в начале full_key...")
             
             cursor.execute("""
-                SELECT "Ключ", "Магазин", "Отдел", "Артикул", "Название", "Гамма", 
-                       "Номер осн. пост.", "Название осн. пост.", "Топ в магазине"
+                SELECT full_key, store_number, department, article_code, name, gamma, 
+                       supplier_code, supplier_name, is_top_store
                 FROM articles 
-                WHERE "Ключ" LIKE ?
-                ORDER BY "Ключ" -- Сортируем, чтобы получить какой-либо результат
+                WHERE full_key LIKE ?
+                ORDER BY full_key -- Сортируем для получения какого-либо результата
                 LIMIT 1
             """, (article_prefix,))
             
             row = cursor.fetchone()
             
             if row:
-                found_key = row['Ключ']
-                found_shop = row['Магазин']
-                logging.info(f"✅ Найден товар по артикулу в ключе: ключ='{found_key}', магазин={found_shop}, название={row['Название']}")
-                return dict(row)
+                found_key = row['full_key']
+                found_shop = row['store_number']
+                logging.info(f"✅ Найден товар по артикулу в full_key: full_key='{found_key}', магазин={found_shop}, название={row['name']}")
+                # Отображаем имена столбцов из БД в имена, ожидаемые get_product_info
+                return {
+                    "Магазин": row['store_number'],
+                    "Отдел": row['department'],
+                    "Артикул": row['article_code'],
+                    "Название": row['name'],
+                    "Гамма": row['gamma'],
+                    "Номер осн. пост.": row['supplier_code'],
+                    "Название осн. пост.": row['supplier_name'],
+                    "Топ в магазине": str(row['is_top_store'])
+                }
             else:
-                logging.warning(f"❌ Товар с артикулом '{article}' не найден даже по артикулу в ключе")
+                logging.warning(f"❌ Товар с артикулом '{article}' не найден даже по артикулу в full_key")
                 
             return None
             
@@ -798,7 +819,6 @@ async def get_product_data_from_db(article: str, shop: str) -> Optional[Dict[str
     except Exception as e:
         logging.error(f"Неожиданная ошибка в get_product_data_from_db: {e}")
         return None
-
 
 
 async def get_supplier_data_from_db(supplier_id: str, shop: str) -> Optional[Dict[str, Any]]:
