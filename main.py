@@ -2124,13 +2124,13 @@ async def mark_task_done(callback: types.CallbackQuery):
             return
 
         # Получаем и обновляем список пользователей
-        statuses = json.loads(sheet.cell(cell.row, 8).value)
+        statuses = json.loads(sheet.cell(cell.row, 9).value)
         if user_id in statuses.get("user_ids", []):
             await callback.answer("✅ Уже отмечено")
             return
         
         statuses["user_ids"].append(user_id)
-        sheet.update_cell(cell.row, 8, json.dumps(statuses))
+        sheet.update_cell(cell.row, 9, json.dumps(statuses))
 
         await callback.answer("✅ Отмечено как выполнено")
 
