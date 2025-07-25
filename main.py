@@ -1068,6 +1068,15 @@ async def process_shop(message: types.Message, state: FSMContext):
         datetime.now().strftime("%d.%m.%Y %H:%M")
     ])
     cache.pop(f"user_{message.from_user.id}", None)  # Сброс кэша пользователя
+    
+    try:
+        # Перезагружаем только кэш пользователей
+        users_records = users_sheet.get_all_records()
+        cache["users_data"] = pickle.dumps(users_records)
+        logging.info(f"✅ Кэш пользователей обновлен после регистрации пользователя {message.from_user.id}")
+    except Exception as e:
+        logging.error(f"Ошибка обновления кэша пользователей после регистрации {message.from_user.id}: {e}")
+        
     await message.answer("✅ Регистрация завершена!", 
                             reply_markup=main_menu_keyboard(message.from_user.id))
     await state.clear()
