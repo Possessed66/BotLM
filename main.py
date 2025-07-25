@@ -704,6 +704,7 @@ async def get_product_info(article: str, shop: str) -> Optional[Dict[str, Any]]:
         
         if not product_data:
             logging.warning(f"Товар не найден в БД: артикул={article}, магазин={shop}")
+            await state.clear() 
             return None
             
         logging.info(f"Найден товар: {product_data.get('Название', 'Неизвестно')}")
