@@ -575,6 +575,7 @@ async def save_task(
         creator_id,
         creator_initials,
         datetime.now().strftime("%d.%m.%Y %H:%M"),
+        "",
         json.dumps({"user_ids": []})  # Пустой список для статусов
     ])
 
