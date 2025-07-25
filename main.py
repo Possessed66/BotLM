@@ -674,7 +674,9 @@ async def get_product_info(article: str, shop: str) -> Optional[Dict[str, Any]]:
                  'Отдел': str(product_data.get('Отдел', '')),
                  'Магазин': shop,
                  'Поставщик': 'Товар РЦ', # Или другое значение по умолчанию
-                 'Топ в магазине': product_data.get('Топ в магазине', '0')
+                 'Топ в магазине': product_data.get('Топ в магазине', '0'),
+                 'Дата заказа': 'Не определена (поставщик не найден)',      
+                 'Дата поставки': 'Не определена (поставщик не найден)',    
              }
 
         supplier_data = await get_supplier_data_from_db(supplier_id, shop)
@@ -688,7 +690,9 @@ async def get_product_info(article: str, shop: str) -> Optional[Dict[str, Any]]:
                 'Отдел': str(product_data.get('Отдел', '')),
                 'Магазин': shop,
                 'Поставщик': 'Товар РЦ', # Или product_data.get('Название осн. пост.', 'Не указано').strip()
-                'Топ в магазине': product_data.get('Топ в магазине', '0')
+                'Топ в магазине': product_data.get('Топ в магазине', '0'),
+                'Дата заказа': 'Не определена (поставщик не найден)',      
+                'Дата поставки': 'Не определена (поставщик не найден)',
             }
 
         # === 4. Парсинг данных поставщика и расчет дат ===
