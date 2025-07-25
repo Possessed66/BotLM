@@ -704,7 +704,6 @@ async def get_product_info(article: str, shop: str) -> Optional[Dict[str, Any]]:
         
         if not product_data:
             logging.warning(f"Товар не найден в БД: артикул={article}, магазин={shop}")
-            await state.clear() 
             return None
             
         logging.info(f"Найден товар: {product_data.get('Название', 'Неизвестно')}")
@@ -1184,7 +1183,7 @@ async def continue_order_process(message: types.Message, state: FSMContext):
     product_info = await get_product_info(article, selected_shop)
     
     if not product_info:
-        await message.answer("❌ Товар не найден в выбранном магазине")
+        await message.answer("❌ Товар не найден в выбранном магазине", reply_markup=main_menu_keyboard(message.from_user.id))
         await state.clear()
         return
         
@@ -1396,7 +1395,7 @@ async def process_info_request(message: types.Message, state: FSMContext):
         
         if not product_info:
             logging.warning(f"Товар {article} не найден для магазина {shop} (пользователь: {user_id})")
-            await message.answer("❌ Товар не найден")
+            await message.answer("❌ Товар не найден", reply_markup=main_menu_keyboard(message.from_user.id))
             await state.clear()
             return
 
