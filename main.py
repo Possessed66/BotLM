@@ -13,6 +13,7 @@ import tracemalloc
 import objgraph
 import psutil
 import sqlite3
+import gspread.utils
 from contextlib import contextmanager
 from aiogram.exceptions import TelegramBadRequest
 from typing import Dict, Any, List, Optional, Tuple
@@ -555,6 +556,7 @@ async def get_user_initials(user_id: int) -> str:
     surname = user_data.get("surname", "")
     return f"{name}.{surname}" if name else surname
 
+
 async def save_task(
     task_id: str,
     text: str,
@@ -576,19 +578,63 @@ async def save_task(
         json.dumps({"user_ids": []})  # Пустой список для статусов
     ])
 
-async def load_tasks() -> dict:
-    """Загрузка задач из Google Sheets"""
+
+async def load_tasks() -> Dict[str, Dict[str, Any]]:
+    """
+    Загрузка задач из Google Sheets.
+    
+    Возвращает словарь: {task_id: {task_data}}
+    task_data включает: text, link, deadline, creator_initials, creator_id, assigned_to, completed_by
+    """
     sheet = get_tasks_sheet()
     tasks = {}
-    for row in sheet.get_all_records():
-        tasks[row["ID задачи"]] = {
-            "text": row["Текст"],
-            "link": row["Ссылка"],
-            "deadline": row["Дедлайн"],
-            "creator_initials": row["Инициалы"],
-            "completed_by": json.loads(row["Статусы"]).get("user_ids", [])
-        }
+    try:
+        records = sheet.get_all_records()
+        for row in records:
+            task_id = str(row.get("ID задачи", "")).strip()
+            if not task_id:
+                continue # Пропускаем строки без ID
+
+            # Обработка назначенных пользователей
+            assigned_raw = str(row.get("Назначена", "")).strip() # <-- Имя столбца "Назначена"
+            if assigned_raw:
+                # Разбиваем строку, очищаем и фильтруем ID
+                assigned_user_ids = [
+                    uid_str for uid_str in 
+                    (uid.strip() for uid in assigned_raw.split(","))
+                    if uid_str.isdigit()
+                ]
+            else:
+                assigned_user_ids = []
+
+            # Обработка выполненных пользователей
+            completed_user_ids = []
+            statuses_raw = str(row.get("Статусы", "{}")).strip()
+            if statuses_raw:
+                try:
+                    statuses_data = json.loads(statuses_raw)
+                    completed_user_ids = statuses_data.get("completed_by", [])
+                    # Убедимся, что это список ID (строк или чисел)
+                    completed_user_ids = [str(uid) for uid in completed_user_ids if str(uid).strip()]
+                except (json.JSONDecodeError, TypeError, ValueError) as e:
+                    logging.warning(f"Ошибка парсинга 'Статусы' для задачи {task_id}: {e}. Считается пустым.")
+                    completed_user_ids = []
+
+            tasks[task_id] = {
+                "text": str(row.get("Текст", "")).strip(),
+                "link": str(row.get("Ссылка", "")).strip(),
+                "deadline": str(row.get("Дедлайн", "")).strip(), # Оставляем как строку, парсим позже
+                "creator_initials": str(row.get("Инициалы", "")).strip(),
+                "creator_id": str(row.get("ID создателя", "")).strip(), # Предполагаем столбец "ID создателя"
+                "assigned_to": assigned_user_ids,      # <-- Новое поле
+                "completed_by": completed_user_ids,    # <-- Обновленное поле
+            }
+        logging.info(f"✅ Загружено {len(tasks)} задач из Google Sheets")
+    except Exception as e:
+        logging.error(f"Ошибка загрузки задач из Google Sheets: {e}")
+        # Возвращаем пустой словарь в случае ошибки
     return tasks
+    
 
 async def delete_task(task_id: str, user_id: int) -> bool:
     """Удаление задачи с проверкой прав"""
@@ -1724,6 +1770,63 @@ def format_task_message(task_id: str, task: dict) -> str:
     )
 
 
+async def assign_tasks_to_users(task_ids: list[str], user_ids: list[int], sheet=None):
+    """
+    Назначает задачи пользователям, обновляя столбец "Назначена" в Google Sheets.
+    
+    Args:
+        task_ids (list[str]): Список ID задач для обновления.
+        user_ids (list[int]): Список ID пользователей, которым назначаются задачи.
+        sheet (gspread.Worksheet, optional): Лист задач. Если None, будет получен заново.
+    """
+    if not task_ids or not user_ids:
+        logging.info("Нет задач или пользователей для назначения.")
+        return
+
+    try:
+        if sheet is None:
+            sheet = get_tasks_sheet()
+        
+        # Преобразуем user_ids в строку, разделенную запятыми
+        assigned_users_str = ", ".join(map(str, user_ids))
+        
+        # Найдем все строки с указанными task_ids
+        # Получаем все значения столбца ID задачи (предположим, это столбец A)
+        task_id_col_values = sheet.col_values(1) # 1 = столбец A
+        # Создаем словарь {task_id: row_number}
+        task_id_to_row = {str(task_id_col_values[i]).strip(): i + 1 for i in range(len(task_id_col_values))}
+        
+        batch_updates = []
+        updated_count = 0
+        
+        for task_id in task_ids:
+            row_number = task_id_to_row.get(str(task_id))
+            if row_number:
+                # столбец "Назначена" - это столбец G (7). 
+                assigned_column_index = 8 # G = 8
+                range_label = gspread.utils.rowcol_to_a1(row_number, assigned_column_index)
+                
+                batch_updates.append({
+                    'range': range_label,
+                    'values': [[assigned_users_str]]
+                })
+                updated_count += 1
+            else:
+                logging.warning(f"Строка для задачи {task_id} не найдена при назначении.")
+        
+        if batch_updates:
+            # Выполняем пакетное обновление
+            sheet.batch_update(batch_updates)
+            logging.info(f"✅ Назначено {updated_count} задач {len(user_ids)} пользователям: {assigned_users_str}")
+        else:
+            logging.warning("Не найдено строк для обновления при назначении задач.")
+            
+    except gspread.exceptions.APIError as e:
+        logging.error(f"API ошибка Google Sheets при назначении задач: {e}")
+    except Exception as e:
+        logging.error(f"Ошибка при назначении задач пользователям: {e}")
+
+
 @dp.message(F.text == "📝 Управление задачами")
 async def handle_task_menu(message: types.Message):
     if message.from_user.id not in ADMINS:
@@ -2041,41 +2144,125 @@ async def mark_task_done(callback: types.CallbackQuery):
         logging.error(f"Ошибка отметки задачи: {str(e)}")
         await callback.answer("❌ Ошибка выполнения")
 
-async def check_deadlines():
-    while True:
-        tasks = await load_tasks()
-        today = datetime.now().strftime("%d.%m.%Y")
-        
-        for task_id, task in tasks.items():
-            if not task.get("deadline"):
-                continue
-                
-            if task["deadline"] < today:  # Просрочено
-                for user_id in task["completed_by"]:
-                    try:
-                        await bot.send_message(
-                            user_id,
-                            f"🚨 *Просрочено!*\nЗадача: {task['text']}\n"
-                            f"Дедлайн был: {task['deadline']}",
-                            parse_mode=ParseMode.MARKDOWN
-                        )
-                    except Exception:
-                        continue
-        
-        await asyncio.sleep(86400)  # Проверка раз в сутки
 
+async def check_deadlines():
+    """
+    Проверка просроченных задач и уведомление пользователей, 
+    которым задача была назначена, но которые её НЕ ВЫПОЛНИЛИ.
+    Проверка происходит раз в сутки.
+    """
+    while True:
+        try:
+            logging.info("🔍 Начало проверки просроченных задач...")
+            tasks = await load_tasks()
+            if not tasks:
+                logging.info("📭 Нет задач для проверки.")
+                await asyncio.sleep(86400) # Ждем 24 часа
+                continue
+
+            today_date = datetime.now().date()
+            notified_count = 0
+            
+            for task_id, task in tasks.items():
+                deadline_str = task.get("deadline")
+                if not deadline_str:
+                    continue # Пропускаем задачи без дедлайна
+
+                try:
+                    # Преобразуем строку дедлайна в объект date
+                    deadline_date = datetime.strptime(deadline_str, "%d.%m.%Y").date()
+                except ValueError as e:
+                    logging.warning(f"Неверный формат даты для задачи {task_id} ('{deadline_str}'): {e}")
+                    continue
+
+                # Проверяем, просрочена ли задача
+                if deadline_date < today_date:
+                    logging.info(f"⏰ Найдена просроченная задача {task_id}: {task['text']}")
+
+                    # --- ЛОГИКА УВЕДОМЛЕНИЯ ---
+                    # Получаем множества ID
+                    assigned_users = set(task.get("assigned_to", []))
+                    completed_users = set(task.get("completed_by", []))
+                    
+                    # Находим пользователей для уведомления: назначены, но не выполнили
+                    users_to_notify = assigned_users - completed_users
+                    
+                    if not users_to_notify:
+                        logging.info(f"📭 По задаче {task_id} нет пользователей для уведомления "
+                                   f"(все выполнили ({len(completed_users)}) или никто не назначен ({len(assigned_users)})).")
+                        continue
+                    
+                    # Формируем сообщение
+                    notification_text = (
+                        f"🚨 *Просроченная задача!*\n"
+                        f"📌 Задача #{task_id}: {task['text']}\n"
+                        f"📅 Дедлайн был: {deadline_str}"
+                    )
+                    
+                    # Отправляем уведомления
+                    for user_id_str in users_to_notify:
+                        try:
+                            user_id_int = int(user_id_str)
+                            await bot.send_message(
+                                user_id_int,
+                                notification_text,
+                                parse_mode=ParseMode.MARKDOWN
+                            )
+                            logging.info(f"✉️ Уведомление о просроченной задаче {task_id} отправлено пользователю {user_id_int}")
+                            notified_count += 1
+                            # Небольшая пауза между сообщениями
+                            await asyncio.sleep(0.1) 
+                        except ValueError:
+                            logging.error(f"Неверный формат ID пользователя '{user_id_str}' для задачи {task_id}")
+                        except Exception as e: # TelegramForbiddenError, TelegramRetryAfter и др.
+                            logging.error(f"❌ Ошибка отправки уведомления пользователю {user_id_str} по задаче {task_id}: {e}")
+
+                    logging.info(f"✅ По задаче {task_id} уведомлено {len(users_to_notify)} пользователей.")
+            
+            logging.info(f"🏁 Проверка просроченных задач завершена. Отправлено уведомлений: {notified_count}")
+                    
+        except Exception as e:
+            logging.error(f"🚨 Критическая ошибка в check_deadlines: {e}", exc_info=True)
+            
+        # Ждем 24 часа до следующей проверки (86400 секунд)
+        logging.info("⏳ check_deadlines уходит в сон на 24 часа.")
+        await asyncio.sleep(86400) 
+        
 
 @dp.message(TaskStates.confirmation, F.text == "📤 Подтвердить отправку")
 async def confirm_task_dispatch(message: types.Message, state: FSMContext):
+    """
+    Подтверждение и выполнение рассылки задач.
+    Перед отправкой назначает задачи выбранным пользователям.
+    """
     data = await state.get_data()
     user_ids = data.get("user_ids", [])
     selected_tasks = data.get("selected_tasks", {})
-
+    
+    # --- Проверка наличия данных ---
     if not user_ids or not selected_tasks:
         await message.answer("❌ Нет получателей или задач для отправки.")
         await state.clear()
         return
 
+    
+    try:
+        task_ids_to_assign = list(selected_tasks.keys())
+        # Преобразуем user_ids из строки (как они хранятся в state) в int
+        user_ids_int = [int(uid) for uid in user_ids if uid.isdigit()]
+        
+        if task_ids_to_assign and user_ids_int:
+            # Назначаем задачи пользователям в Google Sheets
+            # Передаем sheet, чтобы не переоткрывать соединение
+            sheet = get_tasks_sheet() 
+            await assign_tasks_to_users(task_ids_to_assign, user_ids_int, sheet=sheet)
+            await message.answer("✅ Задачи успешно назначены выбранным пользователям.")
+        else:
+            logging.warning("Нет корректных ID задач или пользователей для назначения.")
+    except Exception as e:
+        logging.error(f"Ошибка при назначении задач: {e}")
+        # Можно решить, продолжать ли рассылку в случае ошибки назначения
+        # await message.answer("⚠️ Ошибка при назначении задач, но рассылка продолжится.")
     success = 0
     failed = 0
 
