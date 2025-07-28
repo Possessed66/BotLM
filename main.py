@@ -16,6 +16,7 @@ import sqlite3
 import gspread.utils
 from contextlib import contextmanager
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.utils.markdown import escape_md
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
@@ -2624,14 +2625,16 @@ async def show_task_details(message: types.Message, state: FSMContext):
     string_keyed_tasks = {str(k): v for k, v in tasks.items()}
 
     if input_task_id not in string_keyed_tasks:
-        # Попробуем найти похожие ID
         similar_ids = [tid for tid in string_keyed_tasks.keys() if input_task_id in tid or tid in input_task_id]
         if similar_ids:
+            # Используем escape_md для безопасного отображения ID в сообщении
+            escaped_input_id = escape_md(input_task_id)
+            escaped_similar_ids = [escape_md(sid) for sid in similar_ids[:3]]
             await message.answer(
-                f"❌ Задача с ID `{input_task_id}` не найдена.\n"
-                f"Возможно, вы имели в виду: {', '.join(similar_ids[:3])}?",
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=cancel_keyboard() # Позволим повторить ввод
+                f"❌ Задача с ID `{escaped_input_id}` не найдена.\n"
+                f"Возможно, вы имели в виду: {', '.join(escaped_similar_ids)}?",
+                parse_mode=ParseMode.MARKDOWN, # parse_mode можно оставить, так как мы экранировали
+                reply_markup=cancel_keyboard()
             )
             # Не очищаем state, позволяем повторный ввод
             return
@@ -2642,45 +2645,70 @@ async def show_task_details(message: types.Message, state: FSMContext):
 
     task = string_keyed_tasks[input_task_id]
     
-    # --- Улучшено: Получаем имена назначенных и выполнивших ---
+    # --- Улучшено и Исправлено: Получаем имена назначенных и выполнивших с экранированием ---
     assigned_user_names = []
     for user_id_str in task.get('assigned_to', []):
         try:
             initials = await get_user_initials(int(user_id_str))
-            assigned_user_names.append(f"{initials} (ID: {user_id_str})")
+            # Экранируем данные, полученные из внешних источников
+            escaped_initials = escape_md(initials)
+            escaped_user_id = escape_md(user_id_str)
+            assigned_user_names.append(f"{escaped_initials} (ID: {escaped_user_id})")
         except (ValueError, TypeError) as e:
             logging.warning(f"Неверный формат ID пользователя '{user_id_str}' для задачи {input_task_id} (назначенные): {e}")
-            assigned_user_names.append(f"ID: {user_id_str} (Ошибка)")
+            # Экранируем ID даже в случае ошибки
+            escaped_user_id = escape_md(user_id_str)
+            assigned_user_names.append(f"ID: {escaped_user_id} (Ошибка)")
         except Exception as e:
             logging.error(f"Ошибка получения инициалов для ID {user_id_str} (назначенные): {e}")
-            assigned_user_names.append(f"ID: {user_id_str} (Ошибка загрузки)")
+            # Экранируем ID даже в случае ошибки
+            escaped_user_id = escape_md(user_id_str)
+            assigned_user_names.append(f"ID: {escaped_user_id} (Ошибка загрузки)")
 
     completed_user_names = []
-    for user_id_str in task.get('completed_by', []):
+    for user_id_str in task.get('completed_by', []): # Используем исправленный ключ
         try:
             initials = await get_user_initials(int(user_id_str))
-            completed_user_names.append(f"{initials} (ID: {user_id_str})")
+            # Экранируем данные, полученные из внешних источников
+            escaped_initials = escape_md(initials)
+            escaped_user_id = escape_md(user_id_str)
+            completed_user_names.append(f"{escaped_initials} (ID: {escaped_user_id})")
         except (ValueError, TypeError) as e:
             logging.warning(f"Неверный формат ID пользователя '{user_id_str}' для задачи {input_task_id} (выполнившие): {e}")
-            completed_user_names.append(f"ID: {user_id_str} (Ошибка)")
+            # Экранируем ID даже в случае ошибки
+            escaped_user_id = escape_md(user_id_str)
+            completed_user_names.append(f"ID: {escaped_user_id} (Ошибка)")
         except Exception as e:
             logging.error(f"Ошибка получения инициалов для ID {user_id_str} (выполнившие): {e}")
-            completed_user_names.append(f"ID: {user_id_str} (Ошибка загрузки)")
+            # Экранируем ID даже в случае ошибки
+            escaped_user_id = escape_md(user_id_str)
+            completed_user_names.append(f"ID: {escaped_user_id} (Ошибка загрузки)")
 
+    # --- Исправлено: Экранируем данные из задачи ---
+    escaped_task_id = escape_md(input_task_id)
+    escaped_task_text = escape_md(task['text'])
+    # Для link, deadline, creator_initials также желательно экранировать, если они могут содержать спецсимволы
+    escaped_task_link = escape_md(task.get('link', 'Нет') if task.get('link') else 'Нет')
+    escaped_task_deadline = escape_md(task.get('deadline', 'Не установлен'))
+    escaped_creator_initials = escape_md(task.get('creator_initials', 'Неизвестно'))
+
+    # --- Исправлено: Используем \n для переносов строк ---
     response_lines = [
-        f"📋 *Детали задачи #{input_task_id}*:",
-        f"📌 *Текст:* {task['text']}",
-        f"👤 *Создал:* {task.get('creator_initials', 'Неизвестно')}",
-        f"🔗 *Ссылка:* {task.get('link', 'Нет') if task.get('link') else 'Нет'}",
-        f"📅 *Дедлайн:* {task.get('deadline', 'Не установлен')}",
+        f"📋 *Детали задачи #{escaped_task_id}*:", # ID уже экранирован
+        f"📌 *Текст:* {escaped_task_text}", # Текст экранирован
+        f"👤 *Создал:* {escaped_creator_initials}", # Инициалы экранированы
+        f"🔗 *Ссылка:* {escaped_task_link}", # Ссылка экранирована
+        f"📅 *Дедлайн:* {escaped_task_deadline}", # Дедлайн экранирован
         f"📬 *Назначена ({len(assigned_user_names)}):*",
-        ("\n".join(assigned_user_names) if assigned_user_names else "Никто не назначен"),
+        ("\n".join(assigned_user_names) if assigned_user_names else "Никто не назначен"), # \n между именами
         f"✅ *Выполнили ({len(completed_user_names)}):*",
-        ("\n".join(completed_user_names) if completed_user_names else "Никто не выполнил")
+        ("\n".join(completed_user_names) if completed_user_names else "Никто не выполнил") # \n между именами
     ]
     
-    response = "\n".join(response_lines)
-    # Проверка длины сообщения
+    # --- Исправлено: Используем \n для объединения строк ---
+    response = "\n".join(response_lines) 
+    
+    # Проверка длины сообщения (по-прежнему актуальна)
     if len(response) > 4096:
         # Можно разбить на несколько сообщений или обрезать
         response = response[:4000] + "\n... (сообщение обрезано)"
