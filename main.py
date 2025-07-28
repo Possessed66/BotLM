@@ -359,7 +359,7 @@ class TaskStates(StatesGroup):
     # Состояния для статистики
     view_stats = State()     # Просмотр статистики
     input_task_id_for_details = State() # Ввод ID для детализации
-     review_selection = State()
+    review_selection = State()
 
 # ===================== КЛАВИАТУРЫ =====================
 def create_keyboard(buttons: List[str], sizes: tuple, resize=True, one_time=False) -> types.ReplyKeyboardMarkup:
