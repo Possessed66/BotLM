@@ -286,8 +286,7 @@ USERS_SHEET_NAME = "Пользователи"
 GAMMA_CLUSTER_SHEET = "Гамма кластер"
 TASKS_SHEET_NAME = "Задачи"
 LOGS_SHEET = "Логи"
-MAX_IMAGE_SIZE = 2_000_000
-MAX_WORKERS = 4
+
 
 # ===================== ИНИЦИАЛИЗАЦИЯ =====================
 credentials = Credentials.from_service_account_info(
@@ -997,7 +996,19 @@ async def state_cleanup_task():
                             await dp.storage.set_state(key=key, state=None)
                             await dp.storage.set_data(key=key, data={})
                             del states[key]
-                            cleared_count += 1
+                            try:
+                                await bot.send_message(
+                                    user_id,
+                                    "🕒 Сессия была автоматически завершена из-за неактивности.",
+                                    reply_markup=main_menu_keyboard(user_id) # Отправляем главную клавиатуру
+                                    )
+                                    logging.info(f"Пользователю {user_id} отправлено сообщение о сбросе сессии.")
+                            
+                            except Exception as e:
+        # TelegramForbiddenError (пользователь заблокировал бота), 
+        # TelegramRetryAfter, и т.д.
+                                logging.warning(f"Не удалось отправить сообщение о сбросе сессии пользователю {user_id}: {e}")    
+                        cleared_count += 1
                             
                     except (TypeError, ValueError) as e:
                         logging.error(f"Ошибка формата времени: {str(e)}")
