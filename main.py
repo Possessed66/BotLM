@@ -2143,7 +2143,7 @@ async def handle_manual_user_ids(message: types.Message, state: FSMContext):
     await state.update_data(user_ids=user_ids)
     # --- Изменено: Переход в новое состояние ---
     await state.set_state(TaskStates.review_selection)
-    await review_selection_summary(message, state))
+    await review_selection_summary(message, state)
 
 
 async def review_selection_summary(message: types.Message, state: FSMContext):
