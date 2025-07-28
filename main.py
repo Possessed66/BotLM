@@ -2461,64 +2461,55 @@ async def cancel_task_dispatch(message: types.Message, state: FSMContext):
     await state.clear()
 
 
-# --- Исправленный фрагмент handle_mytasks ---
+# --- Рефакторинг handle_mytasks ---
 @dp.message(Command("mytasks"))
 async def handle_mytasks(message: types.Message):
     user_id = str(message.from_user.id) # Преобразуем в строку для сравнения
-    # sheet = get_tasks_sheet() # Не используем sheet напрямую, работаем через load_tasks
     try:
-        # tasks = await load_tasks() # Загружаем все задачи
-        # pending_tasks = []
-        # for task_id, task in tasks.items():
-        #     # --- Исправлено: Используем ключ "completed_by" ---
-        #     completed_users = task.get("completed_by", [])
-        #     if user_id not in completed_users:
-        #         pending_tasks.append((task_id, task))
-        
-        # Альтернатива: Используем старую логику, но с исправленным статусом
-        sheet = get_tasks_sheet()
-        rows = sheet.get_all_records()
-        pending_tasks = []
-        for row in rows:
-            task_id = row.get("ID задачи")
-            if not task_id:
-                 continue
-            # --- Исправлено: Используем исправленный формат статусов ---
-            statuses_raw = row.get("Статусы", "{}")
-            try:
-                statuses_data = json.loads(statuses_raw)
-            except json.JSONDecodeError:
-                statuses_data = {"completed_by": []}
+        # 1. Загружаем ВСЕ задачи с помощью универсальной функции
+        all_tasks = await load_tasks() # <-- Используем load_tasks
 
-            # --- Исправлено: Проверяем по ключу "completed_by" ---
-            completed_users = statuses_data.get("completed_by", [])
-            if user_id not in completed_users:
-                pending_tasks.append((task_id, normalize_task_row(task_id, row)))
-                
+        # 2. Фильтруем задачи: оставляем только НЕВЫПОЛНЕННЫЕ пользователем
+        pending_tasks = []
+        # all_tasks это словарь {task_id: task_data}
+        for task_id, task_data in all_tasks.items():
+             # task_data уже содержит корректно распарсенный список completed_by
+             completed_users_list = task_data.get("completed_by", [])
+             if user_id not in completed_users_list:
+                 # task_data уже содержит нужные поля (text, deadline и т.д.)
+                 # Можно использовать его напрямую
+                 pending_tasks.append((task_id, task_data)) 
+                 # Если по какой-то причине нужно использовать normalize_task_row, 
+                 # можно, но это менее эффективно, чем использовать task_data напрямую.
+                 # pending_tasks.append((task_id, normalize_task_row(task_id, task_data))) 
+
         if not pending_tasks:
             await message.answer("✅ У вас нет незавершённых задач.")
             return
-            
+
         total_pending = len(pending_tasks)
         shown_count = min(5, total_pending)
-        
         await message.answer(f"📋 У вас {total_pending} незавершенных задач(и). Показываю первые {shown_count}:")
-        
-        for task_id, task in pending_tasks[:5]:  # показываем максимум 5
-            msg = format_task_message(task_id, task) # Используем улучшенный форматтер
+
+        # 3. Отправляем отфильтрованные задачи
+        for task_id, task in pending_tasks[:5]: # показываем максимум 5
+            # Убедитесь, что format_task_message работает с форматом task_data из load_tasks
+            msg = format_task_message(task_id, task) 
             try:
                 await message.answer(
                     msg,
                     parse_mode=ParseMode.MARKDOWN,
-                    reply_markup=get_task_keyboard(task_id) # Используем улучшенную клавиатуру
+                    reply_markup=get_task_keyboard(task_id)
                 )
             except Exception as e:
                 logging.error(f"Ошибка отправки задачи {task_id} пользователю {user_id}: {e}")
                 await message.answer(f"⚠️ Ошибка при отображении задачи {task_id}")
 
         if total_pending > 5:
-            await message.answer(f"ℹ️ Показаны первые 5 задач. Осталось ещё {total_pending - 5}. "
-                                f"Проверяйте регулярно или обратитесь к администратору за полным списком.")
+            await message.answer(
+                f"ℹ️ Показаны первые 5 задач. Осталось ещё {total_pending - 5}. "
+                f"Проверяйте регулярно или обратитесь к администратору за полным списком."
+            )
 
     except Exception as e:
         logging.error(f"Ошибка в /mytasks для пользователя {message.from_user.id}: {str(e)}", exc_info=True)
