@@ -2119,12 +2119,23 @@ async def ask_for_position_filter(message: types.Message, state: FSMContext):
 @dp.message(TaskStates.select_audience, F.text == "Вручную")
 async def ask_for_manual_ids(message: types.Message, state: FSMContext):
     """Обработчик кнопки 'Вручную' в меню выбора аудитории."""
-    # Можно добавить пояснение
-    await message.answer(
-        "🔢 Введите ID пользователей через запятую (например: 123456789, 987654321):",
-        reply_markup=cancel_keyboard()
-    )
-    await state.set_state(TaskStates.input_manual_ids)
+    logging.info(f"Пользователь {message.from_user.id} выбрал 'Вручную' в состоянии select_audience. Текст сообщения: '{message.text}'")
+    # Добавим явную проверку состояния перед ответом
+    current_state = await state.get_state()
+    logging.info(f"Текущее состояние перед ответом: {current_state}")
+    
+    try:
+        await message.answer("🔢 Введите ID пользователей через запятую (например: 123456789, 987654321):", reply_markup=cancel_keyboard())
+        await state.set_state(TaskStates.input_manual_ids)
+        logging.info(f"Состояние успешно изменено на input_manual_ids для пользователя {message.from_user.id}")
+    except Exception as e:
+        logging.error(f"Ошибка в ask_for_manual_ids для пользователя {message.from_user.id}: {e}", exc_info=True)
+        # Отправим сообщение об ошибке, если что-то пошло не так
+        try:
+            await message.answer("❌ Произошла ошибка. Попробуйте снова или выберите другой способ.", reply_markup=tasks_admin_keyboard())
+            await state.clear()
+        except:
+            pass
 
 
 @dp.message(TaskStates.input_position)
