@@ -344,11 +344,9 @@ class TaskStates(StatesGroup):
     add_text = State()
     add_link = State()
     add_deadline = State()
-    
-    
     # Состояния для удаления задач
     delete_task = State()
-    
+    confirm_delete = State()
     # Состояния для отправки задач
     select_action = State()  # Выбор действия (отправить/статистика)
     select_tasks = State()   # Выбор задач для отправки
@@ -361,7 +359,7 @@ class TaskStates(StatesGroup):
     # Состояния для статистики
     view_stats = State()     # Просмотр статистики
     input_task_id_for_details = State() # Ввод ID для детализации
-
+     review_selection = State()
 
 # ===================== КЛАВИАТУРЫ =====================
 def create_keyboard(buttons: List[str], sizes: tuple, resize=True, one_time=False) -> types.ReplyKeyboardMarkup:
@@ -430,7 +428,7 @@ def broadcast_confirmation_keyboard():
 
 def tasks_admin_keyboard() -> types.ReplyKeyboardMarkup:
     return create_keyboard(
-        ["➕ Добавить задачу", "🗑️ Удалить задачу", "📤 Отправить список", "📊 Статистика", "🔙 Назад"],
+        ["➕ Добавить задачу", "🗑️ Удалить задачу", "📤 Отправить список", "📊 Статистика выполнения", "🔙 Назад"],
         (2, 2, 1)
     )
 
@@ -579,10 +577,10 @@ async def save_task(
     ])
 
 
+# --- Исправленный фрагмент load_tasks ---
 async def load_tasks() -> Dict[str, Dict[str, Any]]:
     """
     Загрузка задач из Google Sheets.
-    
     Возвращает словарь: {task_id: {task_data}}
     task_data включает: text, link, deadline, creator_initials, creator_id, assigned_to, completed_by
     """
@@ -594,44 +592,43 @@ async def load_tasks() -> Dict[str, Dict[str, Any]]:
             task_id = str(row.get("ID задачи", "")).strip()
             if not task_id:
                 continue # Пропускаем строки без ID
-
             # Обработка назначенных пользователей
-            assigned_raw = str(row.get("Назначена", "")).strip() # <-- Имя столбца "Назначена"
+            assigned_raw = str(row.get("Назначена", "")).strip()
             if assigned_raw:
                 # Разбиваем строку, очищаем и фильтруем ID
                 assigned_user_ids = [
-                    uid_str for uid_str in 
+                    uid_str for uid_str in
                     (uid.strip() for uid in assigned_raw.split(","))
                     if uid_str.isdigit()
                 ]
             else:
                 assigned_user_ids = []
 
-            # Обработка выполненных пользователей
+            # --- Исправлено: Обработка выполненных пользователей с ключом "completed_by" ---
             completed_user_ids = []
             statuses_raw = str(row.get("Статусы", "{}")).strip()
             if statuses_raw:
                 try:
                     statuses_data = json.loads(statuses_raw)
+                    # --- Исправлено: Используем ключ "completed_by" ---
                     completed_user_ids = statuses_data.get("completed_by", [])
-                    # Убедимся, что это список ID (строк или чисел)
-                    completed_user_ids = [str(uid) for uid in completed_user_ids if str(uid).strip()]
+                    # Убедимся, что это список строк ID
+                    completed_user_ids = [str(uid).strip() for uid in completed_user_ids if str(uid).strip()]
                 except (json.JSONDecodeError, TypeError, ValueError) as e:
                     logging.warning(f"Ошибка парсинга 'Статусы' для задачи {task_id}: {e}. Считается пустым.")
                     completed_user_ids = []
-
             tasks[task_id] = {
                 "text": str(row.get("Текст", "")).strip(),
                 "link": str(row.get("Ссылка", "")).strip(),
-                "deadline": str(row.get("Дедлайн", "")).strip(), # Оставляем как строку, парсим позже
+                "deadline": str(row.get("Дедлайн", "")).strip(),
                 "creator_initials": str(row.get("Инициалы", "")).strip(),
-                "creator_id": str(row.get("ID создателя", "")).strip(), # Предполагаем столбец "ID создателя"
-                "assigned_to": assigned_user_ids,      # <-- Новое поле
-                "completed_by": completed_user_ids,    # <-- Обновленное поле
+                "creator_id": str(row.get("ID создателя", "")).strip(),
+                "assigned_to": assigned_user_ids,
+                "completed_by": completed_user_ids, # Теперь корректно заполняется
             }
         logging.info(f"✅ Загружено {len(tasks)} задач из Google Sheets")
     except Exception as e:
-        logging.error(f"Ошибка загрузки задач из Google Sheets: {e}")
+        logging.error(f"Ошибка загрузки задач из Google Sheets: {e}", exc_info=True)
         # Возвращаем пустой словарь в случае ошибки
     return tasks
     
@@ -1779,22 +1776,33 @@ async def disable_service_mode(message: types.Message):
 
 #============================Задачи========================
 def format_task_message(task_id: str, task: dict) -> str:
-    deadline = task.get('deadline')
-    deadline_text = f"⏰ Дедлайн: {deadline}" if deadline else "⏳ Без дедлайна"
+    """Форматирует сообщение задачи для отправки пользователю."""
+    lines = [f"📌 *Задача #{task_id}*"]
     
-    return (
-        f"📌 *Задача #{task_id}*\n"
-        f"▫️ {task['text']}\n"
-        f"👤 Создал: {task['creator_initials']}\n"
-        f"{deadline_text}\n"
-        f"🔗 {'[Ссылка](' + task['link'] + ')' if task.get('link') else 'Нет ссылки'}"
-    )
+    lines.append(f"▫️ {task['text']}")
+    
+    if task.get('creator_initials'):
+        lines.append(f"👤 Создал: {task['creator_initials']}")
+        
+    if task.get('deadline'):
+        # Можно добавить проверку и подсветку просроченных
+        lines.append(f"⏰ *Дедлайн:* {task['deadline']}")
+    else:
+        lines.append("⏳ *Дедлайн:* Не установлен")
+        
+    if task.get('link'):
+        # Используем Markdown для ссылки
+        lines.append(f"🔗 [Ссылка на документ]({task['link']})")
+    # else: # Можно не добавлять, если ссылка не обязательна
+    #     lines.append("📎 Ссылка: Нет")
+        
+    return "\n".join(lines)
 
 
+# --- Исправленный фрагмент assign_tasks_to_users ---
 async def assign_tasks_to_users(task_ids: list[str], user_ids: list[int], sheet=None):
     """
-    Назначает задачи пользователям, обновляя столбец "Назначена" в Google Sheets.
-    
+    Назначает задачи пользователям, обновляя столбец "Назначена" (H) в Google Sheets.
     Args:
         task_ids (list[str]): Список ID задач для обновления.
         user_ids (list[int]): Список ID пользователей, которым назначаются задачи.
@@ -1803,30 +1811,23 @@ async def assign_tasks_to_users(task_ids: list[str], user_ids: list[int], sheet=
     if not task_ids or not user_ids:
         logging.info("Нет задач или пользователей для назначения.")
         return
-
     try:
         if sheet is None:
             sheet = get_tasks_sheet()
-        
         # Преобразуем user_ids в строку, разделенную запятыми
         assigned_users_str = ", ".join(map(str, user_ids))
-        
-        # Найдем все строки с указанными task_ids
-        # Получаем все значения столбца ID задачи (предположим, это столбец A)
+        # Получаем все значения столбца ID задачи (A)
         task_id_col_values = sheet.col_values(1) # 1 = столбец A
         # Создаем словарь {task_id: row_number}
         task_id_to_row = {str(task_id_col_values[i]).strip(): i + 1 for i in range(len(task_id_col_values))}
-        
         batch_updates = []
         updated_count = 0
-        
         for task_id in task_ids:
             row_number = task_id_to_row.get(str(task_id))
             if row_number:
-                # столбец "Назначена" - это столбец G (7). 
-                assigned_column_index = 8 # G = 8
+                # --- Исправлено: Столбец "Назначена" это H (8) ---
+                assigned_column_index = 8 # H = 8
                 range_label = gspread.utils.rowcol_to_a1(row_number, assigned_column_index)
-                
                 batch_updates.append({
                     'range': range_label,
                     'values': [[assigned_users_str]]
@@ -1834,18 +1835,16 @@ async def assign_tasks_to_users(task_ids: list[str], user_ids: list[int], sheet=
                 updated_count += 1
             else:
                 logging.warning(f"Строка для задачи {task_id} не найдена при назначении.")
-        
         if batch_updates:
             # Выполняем пакетное обновление
             sheet.batch_update(batch_updates)
-            logging.info(f"✅ Назначено {updated_count} задач {len(user_ids)} пользователям: {assigned_users_str}")
+            logging.info(f"✅ Назначено {updated_count} задач {len(user_ids)} пользователям.")
         else:
             logging.warning("Не найдено строк для обновления при назначении задач.")
-            
     except gspread.exceptions.APIError as e:
         logging.error(f"API ошибка Google Sheets при назначении задач: {e}")
     except Exception as e:
-        logging.error(f"Ошибка при назначении задач пользователям: {e}")
+        logging.error(f"Ошибка при назначении задач пользователям: {e}", exc_info=True)
 
 
 @dp.message(F.text == "📝 Управление задачами")
@@ -1904,14 +1903,19 @@ async def save_task_handler(message: types.Message, state: FSMContext):
 
 @dp.message(F.text == "🗑️ Удалить задачу")
 async def delete_task_start(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMINS:
+        return
     tasks = await load_tasks()
     if not tasks:
-        await message.answer("❌ Нет задач для удаления.")
+        await message.answer("❌ Нет задач для удаления.", reply_markup=tasks_admin_keyboard())
         return
-    
-    tasks_list = "\n".join(f"ID: `{id}` — {task['text']}" for id, task in tasks.items())
+    # Формируем список задач
+    tasks_list = "\n".join([f"ID: `{tid}` — {task['text'][:50]}{'...' if len(task['text']) > 50 else ''}" for tid, task in tasks.items()])
     await message.answer(
-        f"Введите ID задачи для удаления:\n{tasks_list}",
+        f"📝 *Список задач:*\n"
+        f"{tasks_list}\n\n"
+        f"✏️ *Введите ID задачи для удаления:*",
+        parse_mode=ParseMode.MARKDOWN,
         reply_markup=cancel_keyboard()
     )
     await state.set_state(TaskStates.delete_task)
@@ -1919,13 +1923,75 @@ async def delete_task_start(message: types.Message, state: FSMContext):
 
 @dp.message(TaskStates.delete_task)
 async def delete_task_handler(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMINS:
+        return
     task_id = message.text.strip()
-    if not await delete_task(task_id, message.from_user.id):
-        await message.answer("❌ Задача не найдена или нет прав!")
-    else:
-        await message.answer("✅ Задача удалена!", reply_markup=tasks_admin_keyboard())
-    await state.clear()
+    tasks = await load_tasks() # Перезагружаем, чтобы убедиться в актуальности
+    task = tasks.get(task_id)
+    if not task:
+        await message.answer("❌ Задача с таким ID не найдена.", reply_markup=tasks_admin_keyboard())
+        await state.clear()
+        return
 
+    # Сохраняем ID задачи для подтверждения
+    await state.update_data(task_id_to_delete=task_id, task_text_to_delete=task['text'])
+    
+    # Создаем inline-клавиатуру для подтверждения
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Да, удалить", callback_data=f"confirm_delete:{task_id}")
+    builder.button(text="❌ Нет, отмена", callback_data="cancel_delete")
+    builder.adjust(2)
+    
+    await message.answer(
+        f"❓ *Вы уверены, что хотите удалить задачу?*\n"
+        f"ID: `{task_id}`\n"
+        f"Текст: {task['text'][:100]}{'...' if len(task['text']) > 100 else ''}",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=builder.as_markup()
+    )
+    await state.set_state(TaskStates.confirm_delete)
+
+
+@dp.callback_query(TaskStates.confirm_delete, F.data.startswith("confirm_delete:"))
+async def confirm_delete_task(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMINS:
+        await callback.answer("⛔ Нет доступа", show_alert=True)
+        return
+        
+    data = await state.get_data()
+    task_id_to_delete = data.get('task_id_to_delete')
+    task_id_from_callback = callback.data.split(":")[1]
+
+    if task_id_to_delete != task_id_from_callback:
+        await callback.answer("❌ Ошибка данных", show_alert=True)
+        await state.clear()
+        return
+
+    success = await delete_task(task_id_to_delete, callback.from_user.id)
+    if success:
+        await callback.message.edit_text(f"✅ Задача `{task_id_to_delete}` успешно удалена.", parse_mode=ParseMode.MARKDOWN)
+        # Или отправить новое сообщение и удалить старое, если edit_text не подходит
+        # await callback.message.delete()
+        # await callback.message.answer(f"✅ Задача `{task_id_to_delete}` успешно удалена.", reply_markup=tasks_admin_keyboard())
+    else:
+        await callback.message.edit_text("❌ Не удалось удалить задачу. Возможно, она не существует или у вас нет прав.", parse_mode=ParseMode.MARKDOWN)
+        # await callback.message.answer("❌ Не удалось удалить задачу...", reply_markup=tasks_admin_keyboard())
+    
+    await state.clear()
+    # Отправляем обновленное меню задач (если не редактировали сообщение выше)
+    # await callback.message.answer("📝 Управление задачами:", reply_markup=tasks_admin_keyboard())
+    await callback.answer() # Закрываем уведомление о нажатии
+
+
+@dp.callback_query(TaskStates.confirm_delete, F.data == "cancel_delete")
+async def cancel_delete_task(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMINS:
+        await callback.answer("⛔ Нет доступа", show_alert=True)
+        return
+    await state.clear()
+    await callback.message.edit_text("❌ Удаление задачи отменено.", parse_mode=ParseMode.MARKDOWN)
+    # await callback.message.answer("❌ Удаление задачи отменено.", reply_markup=tasks_admin_keyboard())
+    await callback.answer()
 
 
 @dp.message(F.text == "📤 Отправить список")
@@ -2029,13 +2095,11 @@ async def process_task_ids(message: types.Message, state: FSMContext):
 
 @dp.message(TaskStates.select_audience, F.text == "Всем пользователям")
 async def send_to_all_users(message: types.Message, state: FSMContext):
-    user_ids = users_sheet.col_values(1)[1:]
+    user_ids = users_sheet.col_values(1)[1:] # Предполагаем, что ID в первом столбце, без заголовка
     await state.update_data(user_ids=user_ids)
-    await message.answer(
-        f"👥 Пользователей: {len(user_ids)}\n📤 Подтвердите отправку задач",
-        reply_markup=create_keyboard(["📤 Подтвердить отправку", "❌ Отмена"], (2,))
-    )
-    await state.set_state(TaskStates.confirmation)
+    # --- Изменено: Переход в новое состояние ---
+    await state.set_state(TaskStates.review_selection)
+    await review_selection_summary(message, state)
 
 
 @dp.message(TaskStates.select_audience, F.text == "По должности")
@@ -2054,32 +2118,72 @@ async def process_position_filter(message: types.Message, state: FSMContext):
             for u in users_data
             if str(u.get("Должность", "")).strip().lower() == position_input
         ]
-
         if not matched_user_ids:
-            await message.answer("❌ Пользователи с такой должностью не найдены.")
+            await message.answer("❌ Пользователи с такой должностью не найдены.", reply_markup=tasks_admin_keyboard())
+            await state.clear() # <-- Важно: очищать состояние при ошибке
             return
-
         await state.update_data(user_ids=matched_user_ids)
-        await message.answer(
-            f"✅ Найдено: {len(matched_user_ids)} пользователей\n📤 Подтвердите отправку задач",
-            reply_markup=create_keyboard(["📤 Подтвердить отправку", "❌ Отмена"], (2,))
-        )
-        await state.set_state(TaskStates.confirmation)
-
+        # --- Изменено: Переход в новое состояние ---
+        await state.set_state(TaskStates.review_selection)
+        await review_selection_summary(message, state)
     except Exception as e:
         logging.error(f"Ошибка при фильтрации по должности: {str(e)}")
-        await message.answer("❌ Ошибка обработки должности")
+        await message.answer("❌ Ошибка обработки должности", reply_markup=tasks_admin_keyboard())
         await state.clear()
 
 
-@dp.message(TaskStates.select_audience, F.text == "Вручную")
-async def ask_for_manual_ids(message: types.Message, state: FSMContext):
-    await message.answer(
-        "Введите ID пользователей через запятую:",
-        reply_markup=cancel_keyboard()
-    )
-    await state.set_state(TaskStates.input_manual_ids)
+@dp.message(TaskStates.input_manual_ids)
+async def handle_manual_user_ids(message: types.Message, state: FSMContext):
+    user_ids = [uid.strip() for uid in message.text.split(",") if uid.strip().isdigit()]
+    if not user_ids:
+        await message.answer("❌ Нет валидных ID. Попробуйте снова.", reply_markup=cancel_keyboard())
+        # Не очищаем состояние, позволяем повторный ввод
+        return
+    await state.update_data(user_ids=user_ids)
+    # --- Изменено: Переход в новое состояние ---
+    await state.set_state(TaskStates.review_selection)
+    await review_selection_summary(message, state))
 
+
+async def review_selection_summary(message: types.Message, state: FSMContext):
+    """
+    Отправляет администратору сводку по выбранной аудитории и задачам перед финальным подтверждением.
+    """
+    data = await state.get_data()
+    user_ids = data.get("user_ids", [])
+    selected_tasks = data.get("selected_tasks", {})
+    
+    if not user_ids or not selected_tasks:
+        await message.answer("❌ Ошибка: Нет данных для подтверждения (пользователи или задачи).", reply_markup=tasks_admin_keyboard())
+        await state.clear()
+        return
+
+    # Формируем сводку
+    summary_lines = [
+        "🔍 *Предварительный просмотр рассылки*:",
+        f"• *Задач для отправки:* {len(selected_tasks)}",
+        f"• *Пользователей для рассылки:* {len(user_ids)}",
+        "",
+        "*Выбранные задачи:*"
+    ]
+    # Ограничиваем список задач, если их много
+    task_items = list(selected_tasks.items())
+    for task_id, task in task_items[:5]: # Показываем первые 5
+        summary_lines.append(f"  • `#{task_id}`: {task['text'][:50]}{'...' if len(task['text']) > 50 else ''}")
+    if len(task_items) > 5:
+        summary_lines.append(f"  ... и ещё {len(task_items) - 5} задач(и).")
+
+    summary_lines.append("")
+    summary_lines.append("Вы уверены, что хотите отправить эти задачи этой аудитории?")
+
+    summary_text = "\n".join(summary_lines)
+    
+    # Отправляем сводку и клавиатуру подтверждения
+    await message.answer(
+        summary_text,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=create_keyboard(["📤 Подтвердить отправку", "❌ Отмена"], (2,))
+    )
 
 async def send_selected_tasks(selected_tasks: dict, user_ids: list):
     results = {"success": 0, "failed": 0}
@@ -2137,89 +2241,115 @@ async def mark_task_done(callback: types.CallbackQuery):
     task_id = callback.data.split(":")[1]
     user_id = callback.from_user.id
     sheet = get_tasks_sheet()
-    
     try:
         cell = sheet.find(task_id)
         if not cell:
             await callback.answer("❌ Задача не найдена")
             return
+        # --- Исправлено: Работаем с ключом "completed_by" ---
+        # Получаем текущие статусы
+        statuses_raw = sheet.cell(cell.row, 9).value # Столбец I (9) - "Статусы"
+        try:
+            # Пытаемся распарсить JSON. Если не удается, создаем пустой.
+            statuses_data = json.loads(statuses_raw) if statuses_raw.strip() else {}
+        except (json.JSONDecodeError, TypeError):
+            logging.warning(f"Неверный формат JSON для задачи {task_id} в строке {cell.row}. Создаю новый.")
+            statuses_data = {}
 
-        # Получаем и обновляем список пользователей
-        statuses = json.loads(sheet.cell(cell.row, 9).value)
-        if user_id in statuses.get("user_ids", []):
-            await callback.answer("✅ Уже отмечено")
-            return
-        
-        statuses["user_ids"].append(user_id)
-        sheet.update_cell(cell.row, 9, json.dumps(statuses))
+        # Инициализируем список выполненных, если его нет
+        if "completed_by" not in statuses_data:
+            statuses_data["completed_by"] = []
 
+        # Проверяем, выполнен ли уже
+        if str(user_id) in statuses_data["completed_by"]:
+             await callback.answer("✅ Уже отмечено")
+             return
+
+        # Добавляем пользователя в список выполнивших
+        statuses_data["completed_by"].append(str(user_id))
+
+        # Сохраняем обновленный JSON
+        sheet.update_cell(cell.row, 9, json.dumps(statuses_data, ensure_ascii=False))
         await callback.answer("✅ Отмечено как выполнено")
-
-        # Обновим inline кнопку
-        new_markup = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="✔️ Выполнено", callback_data="done", disabled=True)]
-        ])
-        await callback.message.edit_reply_markup(reply_markup=new_markup)
-
+        try:
+            # Получаем обновленные данные задачи для форматирования
+            # Это упрощенный способ, в идеале перезагружать задачу
+            # или передавать текст изначально. Для демонстрации сойдет.
+            # Альтернатива: хранить task_text в callback_data или в состоянии.
+            
+            # Простое обновление текста и кнопки
+            original_text = callback.message.text
+            # Добавляем отметку о выполнении в текст (если нужно)
+            # updated_text = f"{original_text}\n\n✅ *Выполнено вами*"
+            
+            new_markup = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="✔️ Выполнено", callback_data="task_already_done")]
+            ])
+            # await callback.message.edit_text(text=updated_text, parse_mode=ParseMode.MARKDOWN, reply_markup=new_markup)
+            # Или просто обновляем кнопку
+            await callback.message.edit_reply_markup(reply_markup=new_markup)
+        except Exception as e:
+            # Ошибка редактирования сообщения не критична
+            logging.warning(f"Не удалось обновить сообщение задачи {task_id} для пользователя {user_id}: {e}")
+            
     except Exception as e:
-        logging.error(f"Ошибка отметки задачи: {str(e)}")
-        await callback.answer("❌ Ошибка выполнения")
+        logging.error(f"Ошибка отметки задачи {task_id} пользователем {user_id}: {str(e)}", exc_info=True)
+        await callback.answer("❌ Ошибка выполнения. Попробуйте позже.", show_alert=True)
 
 
+@dp.callback_query(F.data == "task_already_done")
+async def handle_already_done(callback: types.CallbackQuery):
+    await callback.answer("✅ Задача уже выполнена вами.", show_alert=True)
+
+
+# --- Исправленный фрагмент check_deadlines ---
 async def check_deadlines():
     """
-    Проверка просроченных задач и уведомление пользователей, 
+    Проверка просроченных задач и уведомление пользователей,
     которым задача была назначена, но которые её НЕ ВЫПОЛНИЛИ.
     Проверка происходит раз в сутки.
     """
     while True:
         try:
             logging.info("🔍 Начало проверки просроченных задач...")
-            tasks = await load_tasks()
+            tasks = await load_tasks() # Используем исправленную load_tasks
             if not tasks:
                 logging.info("📭 Нет задач для проверки.")
                 await asyncio.sleep(86400) # Ждем 24 часа
                 continue
-
             today_date = datetime.now().date()
             notified_count = 0
-            
             for task_id, task in tasks.items():
                 deadline_str = task.get("deadline")
                 if not deadline_str:
                     continue # Пропускаем задачи без дедлайна
-
                 try:
                     # Преобразуем строку дедлайна в объект date
                     deadline_date = datetime.strptime(deadline_str, "%d.%m.%Y").date()
                 except ValueError as e:
                     logging.warning(f"Неверный формат даты для задачи {task_id} ('{deadline_str}'): {e}")
                     continue
-
                 # Проверяем, просрочена ли задача
                 if deadline_date < today_date:
                     logging.info(f"⏰ Найдена просроченная задача {task_id}: {task['text']}")
-
-                    # --- ЛОГИКА УВЕДОМЛЕНИЯ ---
+                    # --- Исправлено: Используем ключи из исправленной load_tasks ---
                     # Получаем множества ID
                     assigned_users = set(task.get("assigned_to", []))
-                    completed_users = set(task.get("completed_by", []))
-                    
+                    completed_users = set(task.get("completed_by", [])) # <-- Исправленный ключ
                     # Находим пользователей для уведомления: назначены, но не выполнили
                     users_to_notify = assigned_users - completed_users
-                    
                     if not users_to_notify:
                         logging.info(f"📭 По задаче {task_id} нет пользователей для уведомления "
                                    f"(все выполнили ({len(completed_users)}) или никто не назначен ({len(assigned_users)})).")
                         continue
-                    
                     # Формируем сообщение
                     notification_text = (
-                        f"🚨 *Просроченная задача!*\n"
-                        f"📌 Задача #{task_id}: {task['text']}\n"
+                        f"🚨 *Просроченная задача!*
+"
+                        f"📌 Задача #{task_id}: {task['text']}
+"
                         f"📅 Дедлайн был: {deadline_str}"
                     )
-                    
                     # Отправляем уведомления
                     for user_id_str in users_to_notify:
                         try:
@@ -2232,25 +2362,21 @@ async def check_deadlines():
                             logging.info(f"✉️ Уведомление о просроченной задаче {task_id} отправлено пользователю {user_id_int}")
                             notified_count += 1
                             # Небольшая пауза между сообщениями
-                            await asyncio.sleep(0.1) 
+                            await asyncio.sleep(0.1)
                         except ValueError:
                             logging.error(f"Неверный формат ID пользователя '{user_id_str}' для задачи {task_id}")
                         except Exception as e: # TelegramForbiddenError, TelegramRetryAfter и др.
                             logging.error(f"❌ Ошибка отправки уведомления пользователю {user_id_str} по задаче {task_id}: {e}")
-
                     logging.info(f"✅ По задаче {task_id} уведомлено {len(users_to_notify)} пользователей.")
-            
             logging.info(f"🏁 Проверка просроченных задач завершена. Отправлено уведомлений: {notified_count}")
-                    
         except Exception as e:
             logging.error(f"🚨 Критическая ошибка в check_deadlines: {e}", exc_info=True)
-            
         # Ждем 24 часа до следующей проверки (86400 секунд)
         logging.info("⏳ check_deadlines уходит в сон на 24 часа.")
-        await asyncio.sleep(86400) 
-        
+        await asyncio.sleep(86400)
 
-@dp.message(TaskStates.confirmation, F.text == "📤 Подтвердить отправку")
+
+@dp.message(TaskStates.review_selection, F.text == "📤 Подтвердить отправку") # <-- Новый фильтр
 async def confirm_task_dispatch(message: types.Message, state: FSMContext):
     """
     Подтверждение и выполнение рассылки задач.
@@ -2259,19 +2385,16 @@ async def confirm_task_dispatch(message: types.Message, state: FSMContext):
     data = await state.get_data()
     user_ids = data.get("user_ids", [])
     selected_tasks = data.get("selected_tasks", {})
-    
     # --- Проверка наличия данных ---
     if not user_ids or not selected_tasks:
-        await message.answer("❌ Нет получателей или задач для отправки.")
+        await message.answer("❌ Нет получателей или задач для отправки.", reply_markup=tasks_admin_keyboard())
         await state.clear()
         return
-
-    
+    wait_msg = await message.answer("🔄 Начинаю процесс отправки задач...") # <-- Добавлено: Сообщение о начале
     try:
         task_ids_to_assign = list(selected_tasks.keys())
         # Преобразуем user_ids из строки (как они хранятся в state) в int
         user_ids_int = [int(uid) for uid in user_ids if uid.isdigit()]
-        
         if task_ids_to_assign and user_ids_int:
             # Назначаем задачи пользователям в Google Sheets
             # Передаем sheet, чтобы не переоткрывать соединение
@@ -2283,11 +2406,13 @@ async def confirm_task_dispatch(message: types.Message, state: FSMContext):
     except Exception as e:
         logging.error(f"Ошибка при назначении задач: {e}")
         # Можно решить, продолжать ли рассылку в случае ошибки назначения
-        # await message.answer("⚠️ Ошибка при назначении задач, но рассылка продолжится.")
+        await message.answer("⚠️ Ошибка при назначении задач, но рассылка продолжится.")
     success = 0
     failed = 0
-
-    for uid in user_ids:
+    total_attempts = len(user_ids) * len(selected_tasks)
+    if total_attempts > 100: # <-- Пример: для больших рассылок показываем прогресс
+         progress_msg = await message.answer(f"📨 Отправка... (0/{len(user_ids)})")
+    for i, uid in enumerate(user_ids):
         for task_id, task in selected_tasks.items():
             try:
                 await bot.send_message(
@@ -2297,123 +2422,232 @@ async def confirm_task_dispatch(message: types.Message, state: FSMContext):
                     reply_markup=get_task_keyboard(task_id)
                 )
                 success += 1
-                await asyncio.sleep(0.1)  # защитная пауза
+                await asyncio.sleep(0.05) # немного уменьшена пауза
             except Exception as e:
                 logging.warning(f"Ошибка отправки задачи {task_id} пользователю {uid}: {e}")
                 failed += 1
-
-    await message.answer(
-        f"📊 Отправка завершена:\n"
-        f"• Пользователей: {len(user_ids)}\n"
-        f"• Задач каждому: {len(selected_tasks)}\n"
-        f"• Успешных отправок: {success}\n"
-        f"• Ошибок: {failed}",
-        reply_markup=tasks_admin_keyboard()
+        # Обновляем прогресс, если нужно
+        if total_attempts > 100 and (i + 1) % 10 == 0: # <-- Обновляем каждые 10 пользователей
+            try:
+                await progress_msg.edit_text(f"📨 Отправка... ({i+1}/{len(user_ids)})")
+            except:
+                pass # Игнорируем ошибки редактирования прогресса
+    # Финальный отчет
+    report = (
+        f"📊 Отправка завершена:
+"
+        f"• Пользователей: {len(user_ids)}
+"
+        f"• Задач каждому: {len(selected_tasks)}
+"
+        f"• Успешных отправок: {success}
+"
+        f"• Ошибок: {failed}"
     )
-
+    await message.answer(report, reply_markup=tasks_admin_keyboard())
     await state.clear()
+    # Удаляем сообщения о прогрессе, если они были
+    if total_attempts > 100:
+         try:
+             await wait_msg.delete()
+             await progress_msg.delete()
+         except:
+             pass
 
 
-@dp.message(TaskStates.confirmation, F.text == "❌ Отмена")
+@dp.message(TaskStates.review_selection, F.text == "❌ Отмена") # <-- Новый фильтр
 async def cancel_task_dispatch(message: types.Message, state: FSMContext):
     await message.answer("❌ Отправка отменена", reply_markup=tasks_admin_keyboard())
     await state.clear()
 
 
+# --- Исправленный фрагмент handle_mytasks ---
 @dp.message(Command("mytasks"))
 async def handle_mytasks(message: types.Message):
-    user_id = message.from_user.id
-    sheet = get_tasks_sheet()
-
+    user_id = str(message.from_user.id) # Преобразуем в строку для сравнения
+    # sheet = get_tasks_sheet() # Не используем sheet напрямую, работаем через load_tasks
     try:
+        # tasks = await load_tasks() # Загружаем все задачи
+        # pending_tasks = []
+        # for task_id, task in tasks.items():
+        #     # --- Исправлено: Используем ключ "completed_by" ---
+        #     completed_users = task.get("completed_by", [])
+        #     if user_id not in completed_users:
+        #         pending_tasks.append((task_id, task))
+        
+        # Альтернатива: Используем старую логику, но с исправленным статусом
+        sheet = get_tasks_sheet()
         rows = sheet.get_all_records()
         pending_tasks = []
-
         for row in rows:
             task_id = row.get("ID задачи")
+            if not task_id:
+                 continue
+            # --- Исправлено: Используем исправленный формат статусов ---
             statuses_raw = row.get("Статусы", "{}")
             try:
-                statuses = json.loads(statuses_raw)
+                statuses_data = json.loads(statuses_raw)
             except json.JSONDecodeError:
-                statuses = {"user_ids": []}
+                statuses_data = {"completed_by": []}
 
-            if user_id not in statuses.get("user_ids", []):
+            # --- Исправлено: Проверяем по ключу "completed_by" ---
+            completed_users = statuses_data.get("completed_by", [])
+            if user_id not in completed_users:
                 pending_tasks.append((task_id, normalize_task_row(task_id, row)))
-
+                
         if not pending_tasks:
             await message.answer("✅ У вас нет незавершённых задач.")
             return
-
+            
+        total_pending = len(pending_tasks)
+        shown_count = min(5, total_pending)
+        
+        await message.answer(f"📋 У вас {total_pending} незавершенных задач(и). Показываю первые {shown_count}:")
+        
         for task_id, task in pending_tasks[:5]:  # показываем максимум 5
-            msg = format_task_message(task_id, task)
-            await message.answer(
-                msg,
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=get_task_keyboard(task_id)
-            )
+            msg = format_task_message(task_id, task) # Используем улучшенный форматтер
+            try:
+                await message.answer(
+                    msg,
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=get_task_keyboard(task_id) # Используем улучшенную клавиатуру
+                )
+            except Exception as e:
+                logging.error(f"Ошибка отправки задачи {task_id} пользователю {user_id}: {e}")
+                await message.answer(f"⚠️ Ошибка при отображении задачи {task_id}")
+
+        if total_pending > 5:
+            await message.answer(f"ℹ️ Показаны первые 5 задач. Осталось ещё {total_pending - 5}. "
+                                f"Проверяйте регулярно или обратитесь к администратору за полным списком.")
 
     except Exception as e:
-        logging.error(f"Ошибка в /mytasks: {str(e)}")
-        await message.answer("❌ Не удалось загрузить ваши задачи.")
-        
+        logging.error(f"Ошибка в /mytasks для пользователя {message.from_user.id}: {str(e)}", exc_info=True)
+        await message.answer("❌ Не удалось загрузить ваши задачи. Попробуйте позже.")
+
 
 @dp.message(TaskStates.select_action, F.text == "Статистика выполнения")
 async def show_stats_menu(message: types.Message, state: FSMContext):
     data = await state.get_data()
     tasks = data['tasks']
-    
-    stats = []
+    if not tasks:
+         await message.answer("📭 Нет задач для отображения статистики.", reply_markup=tasks_admin_keyboard())
+         await state.set_state(TaskStates.select_action) # Возвращаемся к выбору действия
+         return
+         
+    stats_lines = ["📊 *Статистика выполнения задач:*"]
     for task_id, task in tasks.items():
-        completed = len(task['completed_by'])
-        stats.append(f"{task_id}: {task['text']} - ✅ {completed} чел.")
+        completed_count = len(task.get('completed_by', []))
+        assigned_count = len(task.get('assigned_to', []))
+        # Более информативная строка
+        stats_line = f"🔹 `#{task_id}`: {task['text'][:30]}{'...' if len(task['text']) > 30 else ''} - ✅ {completed_count}/{assigned_count if assigned_count > 0 else '?'}"
+        stats_lines.append(stats_line)
     
+    stats_text = "\n".join(stats_lines)
+    # Проверяем длину, если слишком длинная, можно разбить на части или предложить выбор задачи
+    if len(stats_text) > 4000: # Примерный лимит
+         stats_text = stats_text[:3900] + "\n... (список обрезан)"
+         
     await message.answer(
-        "📊 Статистика выполнения:\n\n" + "\n".join(stats),
+        stats_text,
+        parse_mode=ParseMode.MARKDOWN,
         reply_markup=create_keyboard(["Детали по задаче", "🔙 Назад"], (1,))
     )
     await state.set_state(TaskStates.view_stats)
+    
 
 @dp.message(TaskStates.view_stats, F.text == "Детали по задаче")
 async def ask_for_task_details(message: types.Message, state: FSMContext):
-    await message.answer("Введите ID задачи для детализации:", reply_markup=cancel_keyboard())
+    data = await state.get_data()
+    tasks = data['tasks']
+    if not tasks:
+         await message.answer("📭 Нет задач для детализации.", reply_markup=tasks_admin_keyboard())
+         await state.set_state(TaskStates.select_action)
+         return
+    # Предлагаем список ID для удобства
+    task_ids = list(tasks.keys())
+    await message.answer(
+        f"✏️ Введите ID задачи для детализации:\n"
+        f"Доступные ID: {', '.join(task_ids) if len(task_ids) <= 10 else ', '.join(task_ids[:10]) + '...'}",
+        reply_markup=cancel_keyboard()
+    )
     await state.set_state(TaskStates.input_task_id_for_details)
 
 
+
+
+# --- Исправленный фрагмент show_task_details ---
 @dp.message(TaskStates.input_task_id_for_details)
 async def show_task_details(message: types.Message, state: FSMContext):
-    # 1. Нормализуем введенный ID задачи к строке
-    input_task_id = str(message.text.strip()) 
+    input_task_id = str(message.text.strip())
     data = await state.get_data()
-    tasks = data['tasks'] 
-    
-    # 2. Нормализуем ключи словаря tasks к строкам для сравнения
-    # Создаем временный словарь с ключами в виде строк
+    tasks = data['tasks']
     string_keyed_tasks = {str(k): v for k, v in tasks.items()}
-    
-    # 3. Проверяем наличие задачи с нормализованным ID
+
     if input_task_id not in string_keyed_tasks:
-        await message.answer("❌ Задача не найдена.")
-        return
+        # Попробуем найти похожие ID
+        similar_ids = [tid for tid in string_keyed_tasks.keys() if input_task_id in tid or tid in input_task_id]
+        if similar_ids:
+            await message.answer(
+                f"❌ Задача с ID `{input_task_id}` не найдена.\n"
+                f"Возможно, вы имели в виду: {', '.join(similar_ids[:3])}?",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=cancel_keyboard() # Позволим повторить ввод
+            )
+            # Не очищаем state, позволяем повторный ввод
+            return
+        else:
+            await message.answer("❌ Задача не найдена.", reply_markup=tasks_admin_keyboard())
+            await state.clear()
+            return
+
+    task = string_keyed_tasks[input_task_id]
     
-    # 4. Получаем данные задачи по нормализованному ID
-    task = string_keyed_tasks[input_task_id] 
-    completed_users = task['completed_by']
+    # --- Улучшено: Получаем имена назначенных и выполнивших ---
+    assigned_user_names = []
+    for user_id_str in task.get('assigned_to', []):
+        try:
+            initials = await get_user_initials(int(user_id_str))
+            assigned_user_names.append(f"{initials} (ID: {user_id_str})")
+        except (ValueError, TypeError) as e:
+            logging.warning(f"Неверный формат ID пользователя '{user_id_str}' для задачи {input_task_id} (назначенные): {e}")
+            assigned_user_names.append(f"ID: {user_id_str} (Ошибка)")
+        except Exception as e:
+            logging.error(f"Ошибка получения инициалов для ID {user_id_str} (назначенные): {e}")
+            assigned_user_names.append(f"ID: {user_id_str} (Ошибка загрузки)")
+
+    completed_user_names = []
+    for user_id_str in task.get('completed_by', []):
+        try:
+            initials = await get_user_initials(int(user_id_str))
+            completed_user_names.append(f"{initials} (ID: {user_id_str})")
+        except (ValueError, TypeError) as e:
+            logging.warning(f"Неверный формат ID пользователя '{user_id_str}' для задачи {input_task_id} (выполнившие): {e}")
+            completed_user_names.append(f"ID: {user_id_str} (Ошибка)")
+        except Exception as e:
+            logging.error(f"Ошибка получения инициалов для ID {user_id_str} (выполнившие): {e}")
+            completed_user_names.append(f"ID: {user_id_str} (Ошибка загрузки)")
+
+    response_lines = [
+        f"📋 *Детали задачи #{input_task_id}*:",
+        f"📌 *Текст:* {task['text']}",
+        f"👤 *Создал:* {task.get('creator_initials', 'Неизвестно')}",
+        f"🔗 *Ссылка:* {task.get('link', 'Нет') if task.get('link') else 'Нет'}",
+        f"📅 *Дедлайн:* {task.get('deadline', 'Не установлен')}",
+        f"📬 *Назначена ({len(assigned_user_names)}):*",
+        ("\n".join(assigned_user_names) if assigned_user_names else "Никто не назначен"),
+        f"✅ *Выполнили ({len(completed_user_names)}):*",
+        ("\n".join(completed_user_names) if completed_user_names else "Никто не выполнил")
+    ]
     
-    # 5. Получаем имена выполнивших
-    user_names = []
-    for user_id in completed_users:
-        initials = await get_user_initials(user_id)
-        user_names.append(f"{initials} (ID: {user_id})")
-    
-    response = (
-        f"📋 Детали задачи {input_task_id}:\n" # Используем нормализованный ID
-        f"Текст: {task['text']}\n"
-        f"Выполнили ({len(completed_users)}):\n"
-    )
-    response += "\n".join(user_names) if user_names else "Никто не выполнил"
-    
-    await message.answer(response, reply_markup=tasks_admin_keyboard())
+    response = "\n".join(response_lines)
+    # Проверка длины сообщения
+    if len(response) > 4096:
+        # Можно разбить на несколько сообщений или обрезать
+        response = response[:4000] + "\n... (сообщение обрезано)"
+        
+    await message.answer(response, parse_mode=ParseMode.MARKDOWN, reply_markup=tasks_admin_keyboard())
     await state.clear()
+
 
 # ===================== ЗАПУСК ПРИЛОЖЕНИЯ =====================
 async def scheduled_cache_update():
