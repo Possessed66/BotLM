@@ -607,29 +607,36 @@ async def load_tasks() -> Dict[str, Dict[str, Any]]:
             # --- Исправлено и Улучшено: Обработка выполненных пользователей с поддержкой старого формата ---
             completed_user_ids = []
             statuses_raw = str(row.get("Статусы", "{}")).strip()
+            logging.debug(f"Задача {task_id}: Сырой статус = '{statuses_raw}'")
             if statuses_raw:
                 try:
                     statuses_data = json.loads(statuses_raw)
+                    logging.debug(f"Задача {task_id}: Распарсенный статус = {statuses_data} (тип: {type(statuses_data)})")
                     if isinstance(statuses_data, dict):
-                        # Новый формат: {"completed_by": [...]}
+                # Новый формат: {"completed_by": [...]}
                         if "completed_by" in statuses_data:
                             completed_user_ids = statuses_data.get("completed_by", [])
-                        # Старый формат: {"user_ids": [...]}
+                            logging.debug(f"Задача {task_id}: Найден ключ 'completed_by': {completed_user_ids}")
+                # Старый формат: {"user_ids": [...]}
                         elif "user_ids" in statuses_data:
                             logging.info(f"Задача {task_id} использует устаревший формат 'user_ids'.")
                             completed_user_ids = statuses_data.get("user_ids", [])
-                        # Если ни один ключ не найден, оставляем пустой список
+                            logging.debug(f"Задача {task_id}: Найден ключ 'user_ids': {completed_user_ids}")
                         else:
                              completed_user_ids = []
-                        # Убедимся, что это список строк ID
+                             logging.debug(f"Задача {task_id}: Ключи в статусе не найдены.")
+                # Убедимся, что это список строк ID
                         completed_user_ids = [str(uid).strip() for uid in completed_user_ids if str(uid).strip()]
+                        logging.debug(f"Задача {task_id}: Финальный список completed_by = {completed_user_ids}")
                     else:
-                        # Если statuses_data не словарь (например, пустой список или что-то еще)
                         logging.warning(f"Неверная структура 'Статусы' для задачи {task_id} (не словарь): {statuses_data}. Считается пустым.")
                         completed_user_ids = []
                 except (json.JSONDecodeError, TypeError, ValueError) as e:
                     logging.warning(f"Ошибка парсинга 'Статусы' для задачи {task_id}: {e}. Считается пустым.")
                     completed_user_ids = []
+    else:
+        completed_user_ids = []
+        logging.debug(f"Задача {task_id}: Статусы пусты.")
             tasks[task_id] = {
                 "text": str(row.get("Текст", "")).strip(),
                 "link": str(row.get("Ссылка", "")).strip(),
@@ -641,6 +648,7 @@ async def load_tasks() -> Dict[str, Dict[str, Any]]:
                 "completed_by": completed_user_ids, 
             }
         logging.info(f"✅ Загружено {len(tasks)} задач из Google Sheets")
+        logging.debug(f"Задача {task_id} добавлена в словарь tasks. completed_by: {tasks[task_id]['completed_by']}")
     except Exception as e:
         logging.error(f"Ошибка загрузки задач из Google Sheets: {e}", exc_info=True)
         # Возвращаем пустой словарь в случае ошибки
@@ -2513,34 +2521,57 @@ async def handle_mytasks(message: types.Message):
         await message.answer("❌ Не удалось загрузить ваши задачи. Попробуйте позже.")
 
 
-@dp.message(TaskStates.select_action, F.text == "Статистика выполнения")
-async def show_stats_menu(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    tasks = data['tasks']
-    if not tasks:
-         await message.answer("📭 Нет задач для отображения статистики.", reply_markup=tasks_admin_keyboard())
-         await state.set_state(TaskStates.select_action) # Возвращаемся к выбору действия
-         return
-         
-    stats_lines = ["📊 *Статистика выполнения задач:*"]
-    for task_id, task in tasks.items():
-        completed_count = len(task.get('completed_by', []))
-        assigned_count = len(task.get('assigned_to', []))
-        # Более информативная строка
-        stats_line = f"🔹 `#{task_id}`: {task['text'][:30]}{'...' if len(task['text']) > 30 else ''} - ✅ {completed_count}/{assigned_count if assigned_count > 0 else '?'}"
-        stats_lines.append(stats_line)
-    
-    stats_text = "\n".join(stats_lines)
-    # Проверяем длину, если слишком длинная, можно разбить на части или предложить выбор задачи
-    if len(stats_text) > 4000: # Примерный лимит
-         stats_text = stats_text[:3900] + "\n... (список обрезан)"
-         
-    await message.answer(
-        stats_text,
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=create_keyboard(["Детали по задаче", "🔙 Назад"], (1,))
-    )
-    await state.set_state(TaskStates.view_stats)
+@dp.message(F.text == "📊 Статистика выполнения") # <-- Слушает из любого состояния
+async def handle_stats_from_main_menu(message: types.Message, state: FSMContext):
+    """Обработчик кнопки '📊 Статистика выполнения' из основного меню задач."""
+    if message.from_user.id not in ADMINS:
+        return
+    try:
+        logging.info(f"Запрос статистики от администратора {message.from_user.id}")
+        tasks = await load_tasks() # Загружаем задачи
+        logging.info(f"load_tasks вернул {len(tasks) if tasks else 0} задач. Тип: {type(tasks)}")
+        # Логируем пример первой задачи для проверки структуры
+        if tasks:
+            first_task_id, first_task = next(iter(tasks.items()))
+            logging.info(f"Пример задачи (ID: {first_task_id}): {first_task}")
+            logging.info(f"  completed_by: {first_task.get('completed_by', 'N/A')} (тип: {type(first_task.get('completed_by', 'N/A'))})")
+            logging.info(f"  assigned_to: {first_task.get('assigned_to', 'N/A')} (тип: {type(first_task.get('assigned_to', 'N/A'))})")
+            
+        if not tasks:
+            await message.answer("📭 Нет задач для отображения статистики.", reply_markup=tasks_admin_keyboard())
+            return
+        # Сохраняем задачи в состоянии
+        await state.update_data(tasks=tasks)
+        
+        # --- Логика из show_stats_menu ---
+        stats_lines = ["📊 *Статистика выполнения задач:*"]
+        for task_id, task in tasks.items():
+            completed_count = len(task.get('completed_by', []))
+            assigned_count = len(task.get('assigned_to', []))
+            # Логируем подсчет для каждой задачи
+            logging.info(f"Задача {task_id}: completed={completed_count}, assigned={assigned_count}")
+            # Более информативная строка
+            stats_line = f"🔹 `#{task_id}`: {task['text'][:30]}{'...' if len(task['text']) > 30 else ''} - ✅ {completed_count}/{assigned_count if assigned_count > 0 else '?'}"
+            stats_lines.append(stats_line)
+        
+        stats_text = "\n".join(stats_lines) # <-- Исправлено: используем \n
+        logging.info(f"Сформированный текст статистики (длина: {len(stats_text)}): {stats_text[:200]}...")
+        # Проверяем длину, если слишком длинная, можно разбить на части или предложить выбор задачи
+        if len(stats_text) > 4000: # Примерный лимит
+             stats_text = stats_text[:3900] + "\n... (список обрезан)"
+             logging.warning("Текст статистики был обрезан из-за превышения лимита длины.")
+             
+        await message.answer(
+            stats_text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=create_keyboard(["Детали по задаче", "🔙 Назад"], (1,))
+        )
+        await state.set_state(TaskStates.view_stats)
+        logging.info("Статистика успешно отправлена.")
+        
+    except Exception as e:
+        logging.error(f"Ошибка при запросе статистики из главного меню для пользователя {message.from_user.id}: {e}", exc_info=True)
+        await message.answer("❌ Ошибка загрузки статистики.", reply_markup=tasks_admin_keyboard())
     
 
 @dp.message(TaskStates.view_stats, F.text == "Детали по задаче")
