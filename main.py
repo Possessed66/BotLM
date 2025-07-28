@@ -604,16 +604,29 @@ async def load_tasks() -> Dict[str, Dict[str, Any]]:
             else:
                 assigned_user_ids = []
 
-            # --- Исправлено: Обработка выполненных пользователей с ключом "completed_by" ---
+            # --- Исправлено и Улучшено: Обработка выполненных пользователей с поддержкой старого формата ---
             completed_user_ids = []
             statuses_raw = str(row.get("Статусы", "{}")).strip()
             if statuses_raw:
                 try:
                     statuses_data = json.loads(statuses_raw)
-                    # --- Исправлено: Используем ключ "completed_by" ---
-                    completed_user_ids = statuses_data.get("completed_by", [])
-                    # Убедимся, что это список строк ID
-                    completed_user_ids = [str(uid).strip() for uid in completed_user_ids if str(uid).strip()]
+                    if isinstance(statuses_data, dict):
+                        # Новый формат: {"completed_by": [...]}
+                        if "completed_by" in statuses_data:
+                            completed_user_ids = statuses_data.get("completed_by", [])
+                        # Старый формат: {"user_ids": [...]}
+                        elif "user_ids" in statuses_data:
+                            logging.info(f"Задача {task_id} использует устаревший формат 'user_ids'.")
+                            completed_user_ids = statuses_data.get("user_ids", [])
+                        # Если ни один ключ не найден, оставляем пустой список
+                        else:
+                             completed_user_ids = []
+                        # Убедимся, что это список строк ID
+                        completed_user_ids = [str(uid).strip() for uid in completed_user_ids if str(uid).strip()]
+                    else:
+                        # Если statuses_data не словарь (например, пустой список или что-то еще)
+                        logging.warning(f"Неверная структура 'Статусы' для задачи {task_id} (не словарь): {statuses_data}. Считается пустым.")
+                        completed_user_ids = []
                 except (json.JSONDecodeError, TypeError, ValueError) as e:
                     logging.warning(f"Ошибка парсинга 'Статусы' для задачи {task_id}: {e}. Считается пустым.")
                     completed_user_ids = []
@@ -624,7 +637,8 @@ async def load_tasks() -> Dict[str, Dict[str, Any]]:
                 "creator_initials": str(row.get("Инициалы", "")).strip(),
                 "creator_id": str(row.get("ID создателя", "")).strip(),
                 "assigned_to": assigned_user_ids,
-                "completed_by": completed_user_ids, # Теперь корректно заполняется
+                # --- Исправлено: Теперь всегда используем ключ "completed_by" в памяти ---
+                "completed_by": completed_user_ids, 
             }
         logging.info(f"✅ Загружено {len(tasks)} задач из Google Sheets")
     except Exception as e:
@@ -632,21 +646,6 @@ async def load_tasks() -> Dict[str, Dict[str, Any]]:
         # Возвращаем пустой словарь в случае ошибки
     return tasks
     
-
-async def delete_task(task_id: str, user_id: int) -> bool:
-    """Удаление задачи с проверкой прав"""
-    sheet = get_tasks_sheet()
-    cell = sheet.find(task_id)
-    if not cell:
-        return False
-    
-    # Проверяем, что удаляет автор или админ
-    task_creator_id = int(sheet.cell(cell.row, 5).value)
-    if user_id != task_creator_id and user_id not in ADMINS:
-        return False
-    
-    sheet.delete_rows(cell.row)
-    return True
 
 # =============================ПАРСЕР=================================
   
@@ -2107,6 +2106,17 @@ async def send_to_all_users(message: types.Message, state: FSMContext):
 async def ask_for_position_filter(message: types.Message, state: FSMContext):
     await message.answer("👥 Введите должность:", reply_markup=cancel_keyboard())
     await state.set_state(TaskStates.input_position)
+
+
+@dp.message(TaskStates.select_audience, F.text == "Вручную")
+async def ask_for_manual_ids(message: types.Message, state: FSMContext):
+    """Обработчик кнопки 'Вручную' в меню выбора аудитории."""
+    # Можно добавить пояснение
+    await message.answer(
+        "🔢 Введите ID пользователей через запятую (например: 123456789, 987654321):",
+        reply_markup=cancel_keyboard()
+    )
+    await state.set_state(TaskStates.input_manual_ids)
 
 
 @dp.message(TaskStates.input_position)
