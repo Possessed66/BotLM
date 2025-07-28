@@ -16,7 +16,7 @@ import sqlite3
 import gspread.utils
 from contextlib import contextmanager
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.utils.markdown import escape_md
+from aiogram.utils.markdown import markdown_decoration
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
@@ -2616,7 +2616,7 @@ async def ask_for_task_details(message: types.Message, state: FSMContext):
 
 
 
-# --- Исправленный фрагмент show_task_details ---
+# --- Исправленный фрагмент show_task_details с markdown_decoration ---
 @dp.message(TaskStates.input_task_id_for_details)
 async def show_task_details(message: types.Message, state: FSMContext):
     input_task_id = str(message.text.strip())
@@ -2627,9 +2627,9 @@ async def show_task_details(message: types.Message, state: FSMContext):
     if input_task_id not in string_keyed_tasks:
         similar_ids = [tid for tid in string_keyed_tasks.keys() if input_task_id in tid or tid in input_task_id]
         if similar_ids:
-            # Используем escape_md для безопасного отображения ID в сообщении
-            escaped_input_id = escape_md(input_task_id)
-            escaped_similar_ids = [escape_md(sid) for sid in similar_ids[:3]]
+            # Используем markdown_decoration.quote для безопасного отображения ID в сообщении
+            escaped_input_id = markdown_decoration.quote(input_task_id)
+            escaped_similar_ids = [markdown_decoration.quote(sid) for sid in similar_ids[:3]]
             await message.answer(
                 f"❌ Задача с ID `{escaped_input_id}` не найдена.\n"
                 f"Возможно, вы имели в виду: {', '.join(escaped_similar_ids)}?",
@@ -2651,18 +2651,18 @@ async def show_task_details(message: types.Message, state: FSMContext):
         try:
             initials = await get_user_initials(int(user_id_str))
             # Экранируем данные, полученные из внешних источников
-            escaped_initials = escape_md(initials)
-            escaped_user_id = escape_md(user_id_str)
+            escaped_initials = markdown_decoration.quote(initials)
+            escaped_user_id = markdown_decoration.quote(user_id_str)
             assigned_user_names.append(f"{escaped_initials} (ID: {escaped_user_id})")
         except (ValueError, TypeError) as e:
             logging.warning(f"Неверный формат ID пользователя '{user_id_str}' для задачи {input_task_id} (назначенные): {e}")
             # Экранируем ID даже в случае ошибки
-            escaped_user_id = escape_md(user_id_str)
+            escaped_user_id = markdown_decoration.quote(user_id_str)
             assigned_user_names.append(f"ID: {escaped_user_id} (Ошибка)")
         except Exception as e:
             logging.error(f"Ошибка получения инициалов для ID {user_id_str} (назначенные): {e}")
             # Экранируем ID даже в случае ошибки
-            escaped_user_id = escape_md(user_id_str)
+            escaped_user_id = markdown_decoration.quote(user_id_str)
             assigned_user_names.append(f"ID: {escaped_user_id} (Ошибка загрузки)")
 
     completed_user_names = []
@@ -2670,27 +2670,27 @@ async def show_task_details(message: types.Message, state: FSMContext):
         try:
             initials = await get_user_initials(int(user_id_str))
             # Экранируем данные, полученные из внешних источников
-            escaped_initials = escape_md(initials)
-            escaped_user_id = escape_md(user_id_str)
+            escaped_initials = markdown_decoration.quote(initials)
+            escaped_user_id = markdown_decoration.quote(user_id_str)
             completed_user_names.append(f"{escaped_initials} (ID: {escaped_user_id})")
         except (ValueError, TypeError) as e:
             logging.warning(f"Неверный формат ID пользователя '{user_id_str}' для задачи {input_task_id} (выполнившие): {e}")
             # Экранируем ID даже в случае ошибки
-            escaped_user_id = escape_md(user_id_str)
+            escaped_user_id = markdown_decoration.quote(user_id_str)
             completed_user_names.append(f"ID: {escaped_user_id} (Ошибка)")
         except Exception as e:
             logging.error(f"Ошибка получения инициалов для ID {user_id_str} (выполнившие): {e}")
             # Экранируем ID даже в случае ошибки
-            escaped_user_id = escape_md(user_id_str)
+            escaped_user_id = markdown_decoration.quote(user_id_str)
             completed_user_names.append(f"ID: {escaped_user_id} (Ошибка загрузки)")
 
     # --- Исправлено: Экранируем данные из задачи ---
-    escaped_task_id = escape_md(input_task_id)
-    escaped_task_text = escape_md(task['text'])
+    escaped_task_id = markdown_decoration.quote(input_task_id)
+    escaped_task_text = markdown_decoration.quote(task['text'])
     # Для link, deadline, creator_initials также желательно экранировать, если они могут содержать спецсимволы
-    escaped_task_link = escape_md(task.get('link', 'Нет') if task.get('link') else 'Нет')
-    escaped_task_deadline = escape_md(task.get('deadline', 'Не установлен'))
-    escaped_creator_initials = escape_md(task.get('creator_initials', 'Неизвестно'))
+    escaped_task_link = markdown_decoration.quote(task.get('link', 'Нет') if task.get('link') else 'Нет')
+    escaped_task_deadline = markdown_decoration.quote(task.get('deadline', 'Не установлен'))
+    escaped_creator_initials = markdown_decoration.quote(task.get('creator_initials', 'Неизвестно'))
 
     # --- Исправлено: Используем \n для переносов строк ---
     response_lines = [
@@ -2715,6 +2715,7 @@ async def show_task_details(message: types.Message, state: FSMContext):
         
     await message.answer(response, parse_mode=ParseMode.MARKDOWN, reply_markup=tasks_admin_keyboard())
     await state.clear()
+
 
 
 # ===================== ЗАПУСК ПРИЛОЖЕНИЯ =====================
