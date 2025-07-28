@@ -588,10 +588,12 @@ async def load_tasks() -> Dict[str, Dict[str, Any]]:
     tasks = {}
     try:
         records = sheet.get_all_records()
+        logging.info(f"Загружено {len(records)} строк из Google Sheets для задач.")
         for row in records:
             task_id = str(row.get("ID задачи", "")).strip()
             if not task_id:
                 continue # Пропускаем строки без ID
+            
             # Обработка назначенных пользователей
             assigned_raw = str(row.get("Назначена", "")).strip()
             if assigned_raw:
@@ -607,36 +609,38 @@ async def load_tasks() -> Dict[str, Dict[str, Any]]:
             # --- Исправлено и Улучшено: Обработка выполненных пользователей с поддержкой старого формата ---
             completed_user_ids = []
             statuses_raw = str(row.get("Статусы", "{}")).strip()
-            logging.debug(f"Задача {task_id}: Сырой статус = '{statuses_raw}'")
+            # logging.debug(f"Задача {task_id}: Сырой статус = '{statuses_raw}'")
             if statuses_raw:
                 try:
                     statuses_data = json.loads(statuses_raw)
-                    logging.debug(f"Задача {task_id}: Распарсенный статус = {statuses_data} (тип: {type(statuses_data)})")
+                    # logging.debug(f"Задача {task_id}: Распарсенный статус = {statuses_data} (тип: {type(statuses_data)})")
                     if isinstance(statuses_data, dict):
-                # Новый формат: {"completed_by": [...]}
+                        # Новый формат: {"completed_by": [...]}
                         if "completed_by" in statuses_data:
                             completed_user_ids = statuses_data.get("completed_by", [])
-                            logging.debug(f"Задача {task_id}: Найден ключ 'completed_by': {completed_user_ids}")
-                # Старый формат: {"user_ids": [...]}
+                            # logging.debug(f"Задача {task_id}: Найден ключ 'completed_by': {completed_user_ids}")
+                        # Старый формат: {"user_ids": [...]}
                         elif "user_ids" in statuses_data:
                             logging.info(f"Задача {task_id} использует устаревший формат 'user_ids'.")
                             completed_user_ids = statuses_data.get("user_ids", [])
-                            logging.debug(f"Задача {task_id}: Найден ключ 'user_ids': {completed_user_ids}")
+                            # logging.debug(f"Задача {task_id}: Найден ключ 'user_ids': {completed_user_ids}")
+                        # Если ни один ключ не найден, оставляем пустой список
                         else:
                              completed_user_ids = []
-                             logging.debug(f"Задача {task_id}: Ключи в статусе не найдены.")
-                # Убедимся, что это список строк ID
+                             # logging.debug(f"Задача {task_id}: Ключи в статусе не найдены.")
+                        # Убедимся, что это список строк ID
                         completed_user_ids = [str(uid).strip() for uid in completed_user_ids if str(uid).strip()]
-                        logging.debug(f"Задача {task_id}: Финальный список completed_by = {completed_user_ids}")
+                        # logging.debug(f"Задача {task_id}: Финальный список completed_by = {completed_user_ids}")
                     else:
+                        # Если statuses_data не словарь (например, пустой список или что-то еще)
                         logging.warning(f"Неверная структура 'Статусы' для задачи {task_id} (не словарь): {statuses_data}. Считается пустым.")
                         completed_user_ids = []
                 except (json.JSONDecodeError, TypeError, ValueError) as e:
                     logging.warning(f"Ошибка парсинга 'Статусы' для задачи {task_id}: {e}. Считается пустым.")
                     completed_user_ids = []
-    else:
-        completed_user_ids = []
-        logging.debug(f"Задача {task_id}: Статусы пусты.")
+            # else:
+            #     logging.debug(f"Задача {task_id}: Статусы пусты.")
+            
             tasks[task_id] = {
                 "text": str(row.get("Текст", "")).strip(),
                 "link": str(row.get("Ссылка", "")).strip(),
@@ -647,12 +651,18 @@ async def load_tasks() -> Dict[str, Dict[str, Any]]:
                 # --- Исправлено: Теперь всегда используем ключ "completed_by" в памяти ---
                 "completed_by": completed_user_ids, 
             }
+            # logging.debug(f"Задача {task_id} добавлена в словарь tasks. completed_by: {tasks[task_id]['completed_by']}")
+            
         logging.info(f"✅ Загружено {len(tasks)} задач из Google Sheets")
-        logging.debug(f"Задача {task_id} добавлена в словарь tasks. completed_by: {tasks[task_id]['completed_by']}")
-    except Exception as e:
+        
+    except Exception as e: # <-- Этот except корректно завершает блок try
         logging.error(f"Ошибка загрузки задач из Google Sheets: {e}", exc_info=True)
-        # Возвращаем пустой словарь в случае ошибки
-    return tasks
+        # tasks = {} # <-- Не нужно, так как tasks уже инициализирован. Просто вернется то, что есть (возможно, пустой словарь).
+        # Возврат произойдет в конце функции
+        
+    # Возврат результата происходит в любом случае
+    return tasks # <-- Эта строка должна быть на уровне функции, вне блока try...except
+
     
 
 # =============================ПАРСЕР=================================
