@@ -355,7 +355,7 @@ async def handle_manager_approval(callback: types.CallbackQuery):
 
     # --- Получение запроса из БД ---
     request_data = await get_approval_request_by_id(request_id)
-    if not request_
+    if not request_data:
         await callback.answer("❌ Запрос не найден.", show_alert=True)
         return
 
