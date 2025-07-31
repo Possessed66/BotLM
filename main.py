@@ -143,309 +143,6 @@ async def global_error_handler(event: types.ErrorEvent, bot: Bot):
     
     return True
 
-# =======================РАБОТА С ЗАПРОСАМИ =======================
-
-def initialize_approval_requests_table():
-    """Создает таблицу для хранения запросов на одобрение заказа ТОП 0."""
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS approval_requests (
-                    request_id TEXT PRIMARY KEY, -- Уникальный ID запроса
-                    user_id INTEGER NOT NULL,
-                    manager_id INTEGER NOT NULL,
-                    department TEXT NOT NULL,
-                    article TEXT NOT NULL,
-                    shop TEXT NOT NULL,
-                    product_name TEXT,
-                    product_supplier TEXT,
-                    status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'approved', 'rejected'
-                    user_data TEXT NOT NULL, -- Сериализованные данные FSM пользователя
-                    manager_message_id INTEGER, -- ID сообщения у менеджера (для редактирования)
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            # Создаем индекс для быстрого поиска по user_id и status
-            cursor.execute('''
-                CREATE INDEX IF NOT EXISTS idx_user_status ON approval_requests(user_id, status)
-            ''')
-            conn.commit()
-            logging.info("✅ Таблица approval_requests инициализирована")
-    except Exception as e:
-        logging.error(f"❌ Ошибка инициализации таблицы approval_requests: {e}")
-
-
-def get_manager_id_by_department(department: str) -> Optional[int]:
-    """Получает ID менеджера по названию отдела из кэша."""
-    try:
-        managers_data_pickled = cache.get("managers_data")
-        if not managers_data_pickled:
-            logging.warning("Кэш менеджеров пуст.")
-            return None
-            
-        managers_records = pickle.loads(managers_data_pickled)
-        
-        # Предполагаемая структура листа "МЗ": "ID менеджера" | "Отдел"
-        # ВАЖНО: Сравнение идет по значению из ячейки Google Sheets (всегда str) 
-        # с department, который приходит из state (формат зависит от источника данных product_info)
-        # Для корректной работы убедитесь, что форматы совпадают (оба str или оба repr числа)
-        for record in managers_records:
-            # record.get("Отдел") - строка из Google Sheets
-            # department - значение из state (проверьте его тип в логах)
-            if str(record.get("Отдел")) == str(department): # Приведение к str для надежности
-                manager_id_raw = record.get("ID менеджера")
-                if manager_id_raw:
-                    try:
-                        # Преобразуем ID из Google Sheets в int
-                        return int(manager_id_raw) 
-                    except (ValueError, TypeError):
-                        logging.warning(f"Некорректный ID менеджера в записи: {record}")
-                        continue
-        logging.info(f"Менеджер для отдела '{department}' не найден в кэше.")
-        return None
-    except Exception as e:
-        logging.error(f"Ошибка получения ID менеджера по отделу '{department}': {e}")
-        return None
-
-
-async def create_approval_request(
-    request_id: str,
-    user_id: int,
-    manager_id: int,
-    department: str,
-    article: str,
-    shop: str,
-    product_name: str,
-    product_supplier: str,
-    user_data: Dict[str, Any]
-) -> bool:
-    """Создает запись запроса на одобрение в БД."""
-    try:
-        serialized_data = json.dumps(user_data, ensure_ascii=False, default=str) # Сериализуем данные FSM
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO approval_requests 
-                (request_id, user_id, manager_id, department, article, shop, product_name, product_supplier, user_data) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                request_id, user_id, manager_id, department, article,
-                shop, product_name, product_supplier, serialized_data
-            ))
-            conn.commit()
-            logging.info(f"✅ Создан запрос на одобрение {request_id} для пользователя {user_id}")
-            return True
-    except Exception as e:
-        logging.error(f"❌ Ошибка создания запроса на одобрение для {user_id}: {e}")
-        return False
-
-
-# Примечание: get_pending_approval_request не используется в текущей логике, но пусть будет
-async def get_pending_approval_request(user_id: int) -> Optional[dict]:
-    """Получает последний незавершенный (ожидающий) запрос пользователя."""
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT * FROM approval_requests 
-                WHERE user_id = ? AND status = 'pending' 
-                ORDER BY created_at DESC LIMIT 1
-            ''', (user_id,))
-            row = cursor.fetchone()
-            if row:
-                # Преобразуем sqlite3.Row в словарь и десериализуем user_data
-                result = dict(row)
-                try:
-                    result['user_data'] = json.loads(result['user_data'])
-                except json.JSONDecodeError as e:
-                    logging.error(f"❌ Ошибка десериализации user_data для запроса {result['request_id']}: {e}")
-                    result['user_data'] = {}
-                return result
-            return None
-    except Exception as e:
-        logging.error(f"❌ Ошибка получения ожидающего запроса для {user_id}: {e}")
-        return None
-
-
-async def update_approval_request_status(
-    request_id: str,
-    status: str,
-    manager_message_id: Optional[int] = None
-) -> bool:
-    """Обновляет статус запроса на одобрение."""
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            if manager_message_id is not None:
-                cursor.execute('''
-                    UPDATE approval_requests 
-                    SET status = ?, updated_at = CURRENT_TIMESTAMP, manager_message_id = ?
-                    WHERE request_id = ?
-                ''', (status, manager_message_id, request_id))
-            else:
-                cursor.execute('''
-                    UPDATE approval_requests 
-                    SET status = ?, updated_at = CURRENT_TIMESTAMP
-                    WHERE request_id = ?
-                ''', (status, request_id))
-            conn.commit()
-            if cursor.rowcount > 0:
-                logging.info(f"✅ Статус запроса {request_id} обновлен на '{status}'")
-                return True
-            else:
-                logging.warning(f"⚠️ Запрос {request_id} не найден для обновления статуса")
-                return False
-    except Exception as e:
-        logging.error(f"❌ Ошибка обновления статуса запроса {request_id}: {e}")
-        return False
-
-
-async def get_approval_request_by_id(request_id: str) -> Optional[dict]:
-    """Получает запрос по его ID."""
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT * FROM approval_requests WHERE request_id = ?', (request_id,))
-            row = cursor.fetchone()
-            if row:
-                result = dict(row)
-                try:
-                    result['user_data'] = json.loads(result['user_data'])
-                except json.JSONDecodeError as e:
-                    logging.error(f"❌ Ошибка десериализации user_data для запроса {request_id}: {e}")
-                    result['user_data'] = {}
-                return result
-            return None
-    except Exception as e:
-        logging.error(f"❌ Ошибка получения запроса {request_id}: {e}")
-        return None
-
-
-async def delete_approval_request(request_id: str) -> bool:
-    """Удаляет запись запроса из БД."""
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('DELETE FROM approval_requests WHERE request_id = ?', (request_id,))
-            conn.commit()
-            if cursor.rowcount > 0:
-                logging.info(f"✅ Запрос {request_id} удален из БД")
-                return True
-            else:
-                logging.warning(f"⚠️ Запрос {request_id} не найден для удаления")
-                return False
-    except Exception as e:
-        logging.error(f"❌ Ошибка удаления запроса {request_id}: {e}")
-        return False
-
-
-# --- Добавьте в импорты в начало файла, если их еще нет ---
-# from aiogram import F
-# from aiogram.utils.keyboard import InlineKeyboardBuilder
-# import logging
-
-# --- Добавьте ЭТУ функцию в ваш файл ---
-@dp.callback_query(F.data.startswith("approve:") | F.data.startswith("reject:"))
-async def handle_manager_approval(callback: types.CallbackQuery):
-    """Обработка нажатий кнопок одобрения/отказа менеджера."""
-    action, request_id = callback.data.split(":", 1)
-    manager_id = callback.from_user.id
-
-    # --- Получение запроса из БД ---
-    request_data = await get_approval_request_by_id(request_id)
-    if not request_data:
-        await callback.answer("❌ Запрос не найден.", show_alert=True)
-        return
-
-    if request_data['manager_id'] != manager_id:
-        await callback.answer("❌ Это не ваш запрос.", show_alert=True)
-        return
-
-    if request_data['status'] != 'pending':
-        await callback.answer(f"❌ Запрос уже {request_data['status']}.", show_alert=True)
-        # Обновляем сообщение менеджера
-        try:
-            status_text = "одобрен" if request_data['status'] == 'approved' else "отклонен"
-            # Используем html.escape для безопасности
-            import html
-            escaped_text = html.escape(callback.message.text_markdown_v2 if callback.message.text_markdown_v2 else callback.message.text or "")
-            await callback.message.edit_text(
-                f"{escaped_text}\n\n<i>Статус уже изменен: {status_text}</i>",
-                parse_mode='HTML'
-            )
-        except Exception as e:
-            logging.warning(f"Не удалось отредактировать сообщение менеджера: {e}")
-        return
-
-    user_id = request_data['user_id']
-    article = request_data['article']
-    shop = request_data['shop']
-
-    if action == "approve":
-        # --- Одобрение ---
-        success = await update_approval_request_status(request_id, 'approved')
-        if success:
-            # --- Уведомление пользователя ---
-            user_message = (
-                f"✅ <b>Менеджер одобрил заказ артикула {article} для магазина {shop}.</b>\n"
-                f"Нажмите кнопку ниже, чтобы продолжить оформление заказа."
-            )
-            # Используем InlineKeyboardBuilder
-            builder = InlineKeyboardBuilder()
-            builder.button(text="🔁 Продолжить заказ", callback_data=f"continue_order:{request_id}")
-            user_kb = builder.as_markup()
-
-            try:
-                await bot.send_message(chat_id=user_id, text=user_message, reply_markup=user_kb, parse_mode='HTML')
-                await callback.answer("✅ Заказ одобрен. Пользователь уведомлен.", show_alert=True)
-                
-                # --- Обновление сообщения менеджера ---
-                try:
-                    # Используем html.escape для безопасности
-                    import html
-                    escaped_text = html.escape(callback.message.text_markdown_v2 if callback.message.text_markdown_v2 else callback.message.text or "")
-                    await callback.message.edit_text(
-                        f"{escaped_text}\n\n✅ <b>Одобрено</b>",
-                        parse_mode='HTML'
-                    )
-                except Exception as e:
-                    logging.warning(f"Не удалось отредактировать сообщение менеджера: {e}")
-                    
-            except Exception as e:
-                logging.error(f"❌ Не удалось отправить уведомление пользователю {user_id}: {e}")
-                await callback.answer("✅ Заказ одобрен, но не удалось уведомить пользователя.", show_alert=True)
-        else:
-            await callback.answer("❌ Ошибка при обновлении статуса запроса.", show_alert=True)
-
-    elif action == "reject":
-        # --- Отказ ---
-        success = await update_approval_request_status(request_id, 'rejected')
-        if success:
-            # --- Уведомление пользователя ---
-            user_message = f"❌ Менеджер отказал в заказе артикула {article} для магазина {shop}."
-            try:
-                await bot.send_message(chat_id=user_id, text=user_message, reply_markup=main_menu_keyboard(user_id))
-                await callback.answer("❌ Заказ отклонен. Пользователь уведомлен.", show_alert=True)
-                
-                # --- Обновление сообщения менеджера ---
-                try:
-                    # Используем html.escape для безопасности
-                    import html
-                    escaped_text = html.escape(callback.message.text_markdown_v2 if callback.message.text_markdown_v2 else callback.message.text or "")
-                    await callback.message.edit_text(
-                        f"{escaped_text}\n\n❌ <b>Отклонено</b>",
-                        parse_mode='HTML'
-                    )
-                except Exception as e:
-                    logging.warning(f"Не удалось отредактировать сообщение менеджера: {e}")
-                    
-            except Exception as e:
-                logging.error(f"❌ Не удалось отправить уведомление об отказе пользователю {user_id}: {e}")
-                await callback.answer("❌ Заказ отклонен, но не удалось уведомить пользователя.", show_alert=True)
-        else:
-            await callback.answer("❌ Ошибка при обновлении статуса запроса.", show_alert=True)
 
 
 # ===================== ПРОФИЛИРОВАНИЕ ПАМЯТИ =====================
@@ -969,6 +666,310 @@ async def load_tasks() -> Dict[str, Dict[str, Any]]:
     return tasks # <-- Эта строка должна быть на уровне функции, вне блока try...except
 
     
+# =======================РАБОТА С ЗАПРОСАМИ =======================
+
+def initialize_approval_requests_table():
+    """Создает таблицу для хранения запросов на одобрение заказа ТОП 0."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS approval_requests (
+                    request_id TEXT PRIMARY KEY, -- Уникальный ID запроса
+                    user_id INTEGER NOT NULL,
+                    manager_id INTEGER NOT NULL,
+                    department TEXT NOT NULL,
+                    article TEXT NOT NULL,
+                    shop TEXT NOT NULL,
+                    product_name TEXT,
+                    product_supplier TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'approved', 'rejected'
+                    user_data TEXT NOT NULL, -- Сериализованные данные FSM пользователя
+                    manager_message_id INTEGER, -- ID сообщения у менеджера (для редактирования)
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            # Создаем индекс для быстрого поиска по user_id и status
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_user_status ON approval_requests(user_id, status)
+            ''')
+            conn.commit()
+            logging.info("✅ Таблица approval_requests инициализирована")
+    except Exception as e:
+        logging.error(f"❌ Ошибка инициализации таблицы approval_requests: {e}")
+
+
+def get_manager_id_by_department(department: str) -> Optional[int]:
+    """Получает ID менеджера по названию отдела из кэша."""
+    try:
+        managers_data_pickled = cache.get("managers_data")
+        if not managers_data_pickled:
+            logging.warning("Кэш менеджеров пуст.")
+            return None
+            
+        managers_records = pickle.loads(managers_data_pickled)
+        
+        # Предполагаемая структура листа "МЗ": "ID менеджера" | "Отдел"
+        # ВАЖНО: Сравнение идет по значению из ячейки Google Sheets (всегда str) 
+        # с department, который приходит из state (формат зависит от источника данных product_info)
+        # Для корректной работы убедитесь, что форматы совпадают (оба str или оба repr числа)
+        for record in managers_records:
+            # record.get("Отдел") - строка из Google Sheets
+            # department - значение из state (проверьте его тип в логах)
+            if str(record.get("Отдел")) == str(department): # Приведение к str для надежности
+                manager_id_raw = record.get("ID менеджера")
+                if manager_id_raw:
+                    try:
+                        # Преобразуем ID из Google Sheets в int
+                        return int(manager_id_raw) 
+                    except (ValueError, TypeError):
+                        logging.warning(f"Некорректный ID менеджера в записи: {record}")
+                        continue
+        logging.info(f"Менеджер для отдела '{department}' не найден в кэше.")
+        return None
+    except Exception as e:
+        logging.error(f"Ошибка получения ID менеджера по отделу '{department}': {e}")
+        return None
+
+
+async def create_approval_request(
+    request_id: str,
+    user_id: int,
+    manager_id: int,
+    department: str,
+    article: str,
+    shop: str,
+    product_name: str,
+    product_supplier: str,
+    user_data: Dict[str, Any]
+) -> bool:
+    """Создает запись запроса на одобрение в БД."""
+    try:
+        serialized_data = json.dumps(user_data, ensure_ascii=False, default=str) # Сериализуем данные FSM
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO approval_requests 
+                (request_id, user_id, manager_id, department, article, shop, product_name, product_supplier, user_data) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                request_id, user_id, manager_id, department, article,
+                shop, product_name, product_supplier, serialized_data
+            ))
+            conn.commit()
+            logging.info(f"✅ Создан запрос на одобрение {request_id} для пользователя {user_id}")
+            return True
+    except Exception as e:
+        logging.error(f"❌ Ошибка создания запроса на одобрение для {user_id}: {e}")
+        return False
+
+
+# Примечание: get_pending_approval_request не используется в текущей логике, но пусть будет
+async def get_pending_approval_request(user_id: int) -> Optional[dict]:
+    """Получает последний незавершенный (ожидающий) запрос пользователя."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM approval_requests 
+                WHERE user_id = ? AND status = 'pending' 
+                ORDER BY created_at DESC LIMIT 1
+            ''', (user_id,))
+            row = cursor.fetchone()
+            if row:
+                # Преобразуем sqlite3.Row в словарь и десериализуем user_data
+                result = dict(row)
+                try:
+                    result['user_data'] = json.loads(result['user_data'])
+                except json.JSONDecodeError as e:
+                    logging.error(f"❌ Ошибка десериализации user_data для запроса {result['request_id']}: {e}")
+                    result['user_data'] = {}
+                return result
+            return None
+    except Exception as e:
+        logging.error(f"❌ Ошибка получения ожидающего запроса для {user_id}: {e}")
+        return None
+
+
+async def update_approval_request_status(
+    request_id: str,
+    status: str,
+    manager_message_id: Optional[int] = None
+) -> bool:
+    """Обновляет статус запроса на одобрение."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            if manager_message_id is not None:
+                cursor.execute('''
+                    UPDATE approval_requests 
+                    SET status = ?, updated_at = CURRENT_TIMESTAMP, manager_message_id = ?
+                    WHERE request_id = ?
+                ''', (status, manager_message_id, request_id))
+            else:
+                cursor.execute('''
+                    UPDATE approval_requests 
+                    SET status = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE request_id = ?
+                ''', (status, request_id))
+            conn.commit()
+            if cursor.rowcount > 0:
+                logging.info(f"✅ Статус запроса {request_id} обновлен на '{status}'")
+                return True
+            else:
+                logging.warning(f"⚠️ Запрос {request_id} не найден для обновления статуса")
+                return False
+    except Exception as e:
+        logging.error(f"❌ Ошибка обновления статуса запроса {request_id}: {e}")
+        return False
+
+
+async def get_approval_request_by_id(request_id: str) -> Optional[dict]:
+    """Получает запрос по его ID."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM approval_requests WHERE request_id = ?', (request_id,))
+            row = cursor.fetchone()
+            if row:
+                result = dict(row)
+                try:
+                    result['user_data'] = json.loads(result['user_data'])
+                except json.JSONDecodeError as e:
+                    logging.error(f"❌ Ошибка десериализации user_data для запроса {request_id}: {e}")
+                    result['user_data'] = {}
+                return result
+            return None
+    except Exception as e:
+        logging.error(f"❌ Ошибка получения запроса {request_id}: {e}")
+        return None
+
+
+async def delete_approval_request(request_id: str) -> bool:
+    """Удаляет запись запроса из БД."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM approval_requests WHERE request_id = ?', (request_id,))
+            conn.commit()
+            if cursor.rowcount > 0:
+                logging.info(f"✅ Запрос {request_id} удален из БД")
+                return True
+            else:
+                logging.warning(f"⚠️ Запрос {request_id} не найден для удаления")
+                return False
+    except Exception as e:
+        logging.error(f"❌ Ошибка удаления запроса {request_id}: {e}")
+        return False
+
+
+# --- Добавьте в импорты в начало файла, если их еще нет ---
+# from aiogram import F
+# from aiogram.utils.keyboard import InlineKeyboardBuilder
+# import logging
+
+# --- Добавьте ЭТУ функцию в ваш файл ---
+@dp.callback_query(F.data.startswith("approve:") | F.data.startswith("reject:"))
+async def handle_manager_approval(callback: types.CallbackQuery):
+    """Обработка нажатий кнопок одобрения/отказа менеджера."""
+    action, request_id = callback.data.split(":", 1)
+    manager_id = callback.from_user.id
+
+    # --- Получение запроса из БД ---
+    request_data = await get_approval_request_by_id(request_id)
+    if not request_data:
+        await callback.answer("❌ Запрос не найден.", show_alert=True)
+        return
+
+    if request_data['manager_id'] != manager_id:
+        await callback.answer("❌ Это не ваш запрос.", show_alert=True)
+        return
+
+    if request_data['status'] != 'pending':
+        await callback.answer(f"❌ Запрос уже {request_data['status']}.", show_alert=True)
+        # Обновляем сообщение менеджера
+        try:
+            status_text = "одобрен" if request_data['status'] == 'approved' else "отклонен"
+            # Используем html.escape для безопасности
+            import html
+            escaped_text = html.escape(callback.message.text_markdown_v2 if callback.message.text_markdown_v2 else callback.message.text or "")
+            await callback.message.edit_text(
+                f"{escaped_text}\n\n<i>Статус уже изменен: {status_text}</i>",
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            logging.warning(f"Не удалось отредактировать сообщение менеджера: {e}")
+        return
+
+    user_id = request_data['user_id']
+    article = request_data['article']
+    shop = request_data['shop']
+
+    if action == "approve":
+        # --- Одобрение ---
+        success = await update_approval_request_status(request_id, 'approved')
+        if success:
+            # --- Уведомление пользователя ---
+            user_message = (
+                f"✅ <b>Менеджер одобрил заказ артикула {article} для магазина {shop}.</b>\n"
+                f"Нажмите кнопку ниже, чтобы продолжить оформление заказа."
+            )
+            # Используем InlineKeyboardBuilder
+            builder = InlineKeyboardBuilder()
+            builder.button(text="🔁 Продолжить заказ", callback_data=f"continue_order:{request_id}")
+            user_kb = builder.as_markup()
+
+            try:
+                await bot.send_message(chat_id=user_id, text=user_message, reply_markup=user_kb, parse_mode='HTML')
+                await callback.answer("✅ Заказ одобрен. Пользователь уведомлен.", show_alert=True)
+                
+                # --- Обновление сообщения менеджера ---
+                try:
+                    # Используем html.escape для безопасности
+                    import html
+                    escaped_text = html.escape(callback.message.text_markdown_v2 if callback.message.text_markdown_v2 else callback.message.text or "")
+                    await callback.message.edit_text(
+                        f"{escaped_text}\n\n✅ <b>Одобрено</b>",
+                        parse_mode='HTML'
+                    )
+                except Exception as e:
+                    logging.warning(f"Не удалось отредактировать сообщение менеджера: {e}")
+                    
+            except Exception as e:
+                logging.error(f"❌ Не удалось отправить уведомление пользователю {user_id}: {e}")
+                await callback.answer("✅ Заказ одобрен, но не удалось уведомить пользователя.", show_alert=True)
+        else:
+            await callback.answer("❌ Ошибка при обновлении статуса запроса.", show_alert=True)
+
+    elif action == "reject":
+        # --- Отказ ---
+        success = await update_approval_request_status(request_id, 'rejected')
+        if success:
+            # --- Уведомление пользователя ---
+            user_message = f"❌ Менеджер отказал в заказе артикула {article} для магазина {shop}."
+            try:
+                await bot.send_message(chat_id=user_id, text=user_message, reply_markup=main_menu_keyboard(user_id))
+                await callback.answer("❌ Заказ отклонен. Пользователь уведомлен.", show_alert=True)
+                
+                # --- Обновление сообщения менеджера ---
+                try:
+                    # Используем html.escape для безопасности
+                    import html
+                    escaped_text = html.escape(callback.message.text_markdown_v2 if callback.message.text_markdown_v2 else callback.message.text or "")
+                    await callback.message.edit_text(
+                        f"{escaped_text}\n\n❌ <b>Отклонено</b>",
+                        parse_mode='HTML'
+                    )
+                except Exception as e:
+                    logging.warning(f"Не удалось отредактировать сообщение менеджера: {e}")
+                    
+            except Exception as e:
+                logging.error(f"❌ Не удалось отправить уведомление об отказе пользователю {user_id}: {e}")
+                await callback.answer("❌ Заказ отклонен, но не удалось уведомить пользователя.", show_alert=True)
+        else:
+            await callback.answer("❌ Ошибка при обновлении статуса запроса.", show_alert=True)
+
 
 # =============================ПАРСЕР=================================
   
