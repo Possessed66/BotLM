@@ -14,6 +14,7 @@ import objgraph
 import psutil
 import sqlite3
 import gspread.utils
+import uuid
 from contextlib import contextmanager
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.utils.markdown import markdown_decoration
@@ -142,6 +143,168 @@ async def global_error_handler(event: types.ErrorEvent, bot: Bot):
     
     return True
 
+# =======================РАБОТА С ЗАПРОСАМИ =======================
+
+def initialize_approval_requests_table():
+    """Создает таблицу для хранения запросов на одобрение заказа ТОП 0."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS approval_requests (
+                    request_id TEXT PRIMARY KEY, -- Уникальный ID запроса
+                    user_id INTEGER NOT NULL,
+                    manager_id INTEGER NOT NULL,
+                    department TEXT NOT NULL,
+                    article TEXT NOT NULL,
+                    shop TEXT NOT NULL,
+                    product_name TEXT,
+                    product_supplier TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'approved', 'rejected'
+                    user_data TEXT NOT NULL, -- Сериализованные данные FSM пользователя
+                    manager_message_id INTEGER, -- ID сообщения у менеджера (для редактирования)
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            # Создаем индекс для быстрого поиска по user_id и status
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_user_status ON approval_requests(user_id, status)
+            ''')
+            conn.commit()
+            logging.info("✅ Таблица approval_requests инициализирована")
+    except Exception as e:
+        logging.error(f"❌ Ошибка инициализации таблицы approval_requests: {e}")
+        
+async def create_approval_request(
+    request_id: str,
+    user_id: int,
+    manager_id: int,
+    department: str,
+    article: str,
+    shop: str,
+    product_name: str,
+    product_supplier: str,
+    user_data: Dict[str, Any]
+) -> bool:
+    """Создает запись запроса на одобрение в БД."""
+    try:
+        serialized_data = json.dumps(user_data, ensure_ascii=False, default=str) # Сериализуем данные FSM
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO approval_requests 
+                (request_id, user_id, manager_id, department, article, shop, product_name, product_supplier, user_data) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                request_id, user_id, manager_id, department, article,
+                shop, product_name, product_supplier, serialized_data
+            ))
+            conn.commit()
+            logging.info(f"✅ Создан запрос на одобрение {request_id} для пользователя {user_id}")
+            return True
+    except Exception as e:
+        logging.error(f"❌ Ошибка создания запроса на одобрение для {user_id}: {e}")
+        return False
+
+
+# Примечание: get_pending_approval_request не используется в текущей логике, но пусть будет
+async def get_pending_approval_request(user_id: int) -> Optional[dict]:
+    """Получает последний незавершенный (ожидающий) запрос пользователя."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM approval_requests 
+                WHERE user_id = ? AND status = 'pending' 
+                ORDER BY created_at DESC LIMIT 1
+            ''', (user_id,))
+            row = cursor.fetchone()
+            if row:
+                # Преобразуем sqlite3.Row в словарь и десериализуем user_data
+                result = dict(row)
+                try:
+                    result['user_data'] = json.loads(result['user_data'])
+                except json.JSONDecodeError as e:
+                    logging.error(f"❌ Ошибка десериализации user_data для запроса {result['request_id']}: {e}")
+                    result['user_data'] = {}
+                return result
+            return None
+    except Exception as e:
+        logging.error(f"❌ Ошибка получения ожидающего запроса для {user_id}: {e}")
+        return None
+
+
+async def update_approval_request_status(
+    request_id: str,
+    status: str,
+    manager_message_id: Optional[int] = None
+) -> bool:
+    """Обновляет статус запроса на одобрение."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            if manager_message_id is not None:
+                cursor.execute('''
+                    UPDATE approval_requests 
+                    SET status = ?, updated_at = CURRENT_TIMESTAMP, manager_message_id = ?
+                    WHERE request_id = ?
+                ''', (status, manager_message_id, request_id))
+            else:
+                cursor.execute('''
+                    UPDATE approval_requests 
+                    SET status = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE request_id = ?
+                ''', (status, request_id))
+            conn.commit()
+            if cursor.rowcount > 0:
+                logging.info(f"✅ Статус запроса {request_id} обновлен на '{status}'")
+                return True
+            else:
+                logging.warning(f"⚠️ Запрос {request_id} не найден для обновления статуса")
+                return False
+    except Exception as e:
+        logging.error(f"❌ Ошибка обновления статуса запроса {request_id}: {e}")
+        return False
+
+
+async def get_approval_request_by_id(request_id: str) -> Optional[dict]:
+    """Получает запрос по его ID."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM approval_requests WHERE request_id = ?', (request_id,))
+            row = cursor.fetchone()
+            if row:
+                result = dict(row)
+                try:
+                    result['user_data'] = json.loads(result['user_data'])
+                except json.JSONDecodeError as e:
+                    logging.error(f"❌ Ошибка десериализации user_data для запроса {request_id}: {e}")
+                    result['user_data'] = {}
+                return result
+            return None
+    except Exception as e:
+        logging.error(f"❌ Ошибка получения запроса {request_id}: {e}")
+        return None
+
+
+async def delete_approval_request(request_id: str) -> bool:
+    """Удаляет запись запроса из БД."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM approval_requests WHERE request_id = ?', (request_id,))
+            conn.commit()
+            if cursor.rowcount > 0:
+                logging.info(f"✅ Запрос {request_id} удален из БД")
+                return True
+            else:
+                logging.warning(f"⚠️ Запрос {request_id} не найден для удаления")
+                return False
+    except Exception as e:
+        logging.error(f"❌ Ошибка удаления запроса {request_id}: {e}")
+        return False
 
 
 # ===================== ПРОФИЛИРОВАНИЕ ПАМЯТИ =====================
@@ -260,7 +423,7 @@ logging.basicConfig(
 )
 
 # Сервисный режим
-SERVICE_MODE = False
+SERVICE_MODE = True
 ADMINS = [122086799, 5183727015]
 
 # Кэширование
@@ -1264,9 +1427,98 @@ async def process_order_reason(message: types.Message, state: FSMContext):
     data = await state.get_data()
     selected_shop = data.get('selected_shop')
 
-    warning = ""
     if data.get('top_in_shop', '0') == '0':
-        warning = "\n\n⚠️ <b>Внимание, артикул в ТОП 0!</b>\nСвяжись с менеджером для уточнения возможности заказа"
+        article = data.get('article')
+        product_name = data.get('product_name', 'Неизвестно')
+        product_supplier = data.get('product_supplier', 'Неизвестно')
+        # --- Исправлено: Используем 'department' из state ---
+        department = data.get('department', 'Неизвестно') 
+        
+        # --- Получение ID менеджера из кэша ---
+        manager_id = get_manager_id_by_department(department)
+        
+        if not manager_id:
+            # Если менеджер не найден, завершаем заказ
+            await message.answer(
+                "❌ Не удалось определить менеджера для отдела товара. Свяжитесь с администратором.",
+                reply_markup=main_menu_keyboard(message.from_user.id)
+            )
+            await state.clear()
+            logging.warning(f"Менеджер для отдела '{department}' не найден в кэше МЗ.")
+            return
+
+        # --- Создание записи в БД ---
+        # Генерируем request_id здесь, чтобы использовать его в callback_data
+        request_id = str(uuid.uuid4())
+        success_db_create = await create_approval_request(
+            request_id=request_id, # Передаем сгенерированный ID
+            user_id=message.from_user.id,
+            manager_id=manager_id,
+            department=department,
+            article=article,
+            shop=selected_shop,
+            product_name=product_name,
+            product_supplier=product_supplier,
+            user_data=data # Передаем все данные FSM
+        )
+        
+        if not success_db_create:
+             await message.answer(
+                 "❌ Ошибка при создании запроса на одобрение. Попробуйте позже.",
+                 reply_markup=main_menu_keyboard(message.from_user.id)
+             )
+             await state.clear()
+             return
+
+        # --- Формирование сообщения для менеджера ---
+        manager_message = (
+            f"🚨 <b>Запрос на одобрение заказа ТОП 0</b>\n"
+            f"👤 Пользователь: @{message.from_user.username or 'N/A'} (ID: {message.from_user.id})\n"
+            f"🏪 Магазин: {selected_shop}\n"
+            f"📦 Артикул: {article}\n"
+            f"🏷️ Название: {product_name}\n"
+            f"🏭 Поставщик: {product_supplier}\n"
+            f"🔢 Отдел: {department}\n"
+            f"📝 Причина заказа: {reason}\n\n"
+            f"Запрос ID: <code>{request_id}</code>"
+        )
+        approve_btn = InlineKeyboardButton(text="✅ Одобрить", callback_data=f"approve:{request_id}")
+        reject_btn = InlineKeyboardButton(text="❌ Отказать", callback_data=f"reject:{request_id}")
+        manager_kb = InlineKeyboardMarkup(inline_keyboard=[[approve_btn, reject_btn]])
+
+        # --- Отправка сообщения менеджеру ---
+        try:
+            sent_message = await bot.send_message(
+                chat_id=manager_id,
+                text=manager_message,
+                reply_markup=manager_kb,
+                parse_mode='HTML'
+            )
+            # Обновляем запись в БД с ID сообщения менеджера
+            await update_approval_request_status(request_id, 'pending', sent_message.message_id)
+        except Exception as e:
+            logging.error(f"❌ Не удалось отправить запрос менеджеру {manager_id}: {e}")
+            await message.answer(
+                "❌ Не удалось отправить запрос менеджеру. Попробуйте позже.",
+                reply_markup=main_menu_keyboard(message.from_user.id)
+            )
+            # Удаляем запись запроса из БД при ошибке отправки
+            await delete_approval_request(request_id)
+            await state.clear()
+            return
+
+        # --- Сообщение пользователю ---
+        await message.answer(
+            "⚠️ <b>Внимание, артикул в ТОП 0!</b>\n"
+            "Запрос на возможность заказа отправлен менеджеру. Вы можете продолжить работу с ботом. "
+            "После одобрения вы получите уведомление.",
+            parse_mode='HTML',
+            reply_markup=main_menu_keyboard(message.from_user.id)
+        )
+        
+        # --- Очистка состояния пользователя ---
+        await state.clear()
+        return # Завершаем обработку, заказ приостановлен
     
     response = (
         "🔎 Проверьте данные заказа:\n"
@@ -2757,6 +3009,7 @@ async def main():
     """Главная функция запуска"""
     try:
         await startup()
+        initialize_approval_requests_table()
         logging.info("✅ Бот запущен в режиме поллинга")
         await dp.start_polling(bot, skip_updates=True)
     except KeyboardInterrupt:
