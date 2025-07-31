@@ -1530,7 +1530,6 @@ async def process_order_reason(message: types.Message, state: FSMContext):
         f"🚚 Дата поставки: {data['delivery_date']}\n"
         f"Количество: {data['quantity']}\n"
         f"Номер заказа/Причина: {reason}\n"
-        f"{warning}"
     )
     
     await message.answer(response, reply_markup=confirm_keyboard())
