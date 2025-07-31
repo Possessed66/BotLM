@@ -424,7 +424,7 @@ logging.basicConfig(
 
 # Сервисный режим
 SERVICE_MODE = True
-ADMINS = [122086799, 5183727015]
+ADMINS = [122086799]
 
 # Кэширование
 CACHE_TTL = 43200  # 12 часов
@@ -450,7 +450,7 @@ USERS_SHEET_NAME = "Пользователи"
 GAMMA_CLUSTER_SHEET = "Гамма кластер"
 TASKS_SHEET_NAME = "Задачи"
 LOGS_SHEET = "Логи"
-
+MANAGERS_SHEET_NAME = "МЗ"
 
 # ===================== ИНИЦИАЛИЗАЦИЯ =====================
 credentials = Credentials.from_service_account_info(
@@ -953,6 +953,12 @@ async def preload_cache() -> None:
         users_records = users_sheet.get_all_records()
         cache["users_data"] = pickle.dumps(users_records)
         
+        managers_sheet = SPREADSHEET_NAME.worksheet(MANAGERS_SHEET_NAME)
+        
+        managers_records = managers_sheet.get_all_records()
+        cache["managers_data"] = pickle.dumps(managers_records)
+        cache_size_managers = len(pickle.dumps(managers_records)) / 1024 / 1024
+        logging.info(f"✅ Кэш менеджеров (лист '{MANAGERS_SHEET_NAME}') загружен. Размер: {cache_size_managers:.2f} MB")
         cache_size = sum(len(pickle.dumps(v)) for v in cache.values()) / 1024 / 1024
         logging.info(f"✅ Кэш пользователей загружен. Размер: {cache_size:.2f} MB")
         logging.info("✅ Кэш успешно загружен (без gamma_index)")
