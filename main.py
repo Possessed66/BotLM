@@ -891,11 +891,10 @@ async def handle_manager_approval(callback: types.CallbackQuery):
         # Обновляем сообщение менеджера
         try:
             status_text = "одобрен" if request_data['status'] == 'approved' else "отклонен"
-            # Используем html.escape для безопасности
-            import html
-            escaped_text = html.escape(callback.message.text_markdown_v2 if callback.message.text_markdown_v2 else callback.message.text or "")
+        # ИСПОЛЬЗУЕМ callback.message.text ВМЕСТО callback.message.text_markdown_v2
+            original_text = callback.message.text or "Запрос на одобрение"
             await callback.message.edit_text(
-                f"{escaped_text}\n\n<i>Статус уже изменен: {status_text}</i>",
+                f"{original_text}\n\n<i>Статус уже изменен: {status_text}</i>",
                 parse_mode='HTML'
             )
         except Exception as e:
@@ -904,6 +903,7 @@ async def handle_manager_approval(callback: types.CallbackQuery):
 
     user_id = request_data['user_id']
     article = request_data['article']
+    product_name = request_data['product_name']
     shop = request_data['shop']
 
     if action == "approve":
@@ -912,7 +912,7 @@ async def handle_manager_approval(callback: types.CallbackQuery):
         if success:
             # --- Уведомление пользователя ---
             user_message = (
-                f"✅ <b>Менеджер одобрил заказ артикула {article} для магазина {shop}.</b>\n"
+                f"✅ <b>Менеджер одобрил заказ артикула {article} {product_name} для магазина {shop}.</b>\n"
                 f"Нажмите кнопку ниже, чтобы продолжить оформление заказа."
             )
             # Используем InlineKeyboardBuilder
@@ -926,15 +926,14 @@ async def handle_manager_approval(callback: types.CallbackQuery):
                 
                 # --- Обновление сообщения менеджера ---
                 try:
-                    # Используем html.escape для безопасности
-                    import html
-                    escaped_text = html.escape(callback.message.text_markdown_v2 if callback.message.text_markdown_v2 else callback.message.text or "")
+                # ИСПОЛЬЗУЕМ callback.message.text ВМЕСТО callback.message.text_markdown_v2
+                    original_text = callback.message.text or "Запрос на одобрение"
                     await callback.message.edit_text(
-                        f"{escaped_text}\n\n✅ <b>Одобрено</b>",
+                        f"{original_text}\n\n✅ <b>Одобрено</b>",
                         parse_mode='HTML'
                     )
                 except Exception as e:
-                    logging.warning(f"Не удалось отредактировать сообщение менеджера: {e}")
+                    logging.warning(f"Не удалось отредактировать сообщение менеджера (одобрение): {e}")
                     
             except Exception as e:
                 logging.error(f"❌ Не удалось отправить уведомление пользователю {user_id}: {e}")
@@ -954,11 +953,10 @@ async def handle_manager_approval(callback: types.CallbackQuery):
                 
                 # --- Обновление сообщения менеджера ---
                 try:
-                    # Используем html.escape для безопасности
-                    import html
-                    escaped_text = html.escape(callback.message.text_markdown_v2 if callback.message.text_markdown_v2 else callback.message.text or "")
+                # ИСПОЛЬЗУЕМ callback.message.text ВМЕСТО callback.message.text_markdown_v2
+                    original_text = callback.message.text or "Запрос на одобрение"
                     await callback.message.edit_text(
-                        f"{escaped_text}\n\n❌ <b>Отклонено</b>",
+                        f"{original_text}\n\n❌ <b>Отклонено</b>",
                         parse_mode='HTML'
                     )
                 except Exception as e:
