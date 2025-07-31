@@ -1707,9 +1707,11 @@ async def process_quantity_input(message: types.Message, state: FSMContext):
             f"📝 Причина заказа: {reason_placeholder}\n\n"
             f"Запрос ID: <code>{request_id}</code>"
         )
-        approve_btn = InlineKeyboardButton(text="✅ Одобрить", callback_data=f"approve:{request_id}")
-        reject_btn = InlineKeyboardButton(text="❌ Отказать", callback_data=f"reject:{request_id}")
-        manager_kb = InlineKeyboardMarkup(inline_keyboard=[[approve_btn, reject_btn]])
+        builder = InlineKeyboardBuilder()
+        builder.button(text="✅ Одобрить", callback_data=f"approve:{request_id}")
+        builder.button(text="❌ Отказать", callback_data=f"reject:{request_id}")
+        builder.adjust(2) # Расположить 2 кнопки в одном ряду
+        manager_kb = builder.as_markup()
 
         # --- Отправка сообщения менеджеру ---
         try:
