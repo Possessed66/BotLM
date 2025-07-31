@@ -980,7 +980,7 @@ async def handle_continue_order(callback: types.CallbackQuery, state: FSMContext
 
     # --- Получение запроса из БД ---
     request_data = await get_approval_request_by_id(request_id)
-    if not request_
+    if not request_data:
         await callback.answer("❌ Запрос не найден или уже обработан.", show_alert=True)
         try:
             await callback.message.delete()
