@@ -1048,7 +1048,7 @@ async def handle_continue_order(callback: types.CallbackQuery, state: FSMContext
         except Exception as e:
             logging.debug(f"Не удалось удалить сообщение с кнопкой 'Продолжить заказ': {e}")
             
-        await callback.message.answer(confirmation_response, reply_markup=confirmation_keyboard())
+        await callback.message.answer(confirmation_response, reply_markup=confirm_keyboard())
         await state.set_state(OrderStates.confirmation)
         
     except Exception as e:
