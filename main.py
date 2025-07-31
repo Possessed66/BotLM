@@ -26,7 +26,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.enums import ParseMode
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
-from aiogram.types import ReplyKeyboardRemove, File, BufferedInputFile
+from aiogram.types import ReplyKeyboardRemove, File, BufferedInputFile, InlineKeyboardMarkup
 from aiogram.exceptions import TelegramForbiddenError
 from aiogram.filters import Command
 from contextlib import suppress
@@ -339,6 +339,113 @@ async def delete_approval_request(request_id: str) -> bool:
     except Exception as e:
         logging.error(f"❌ Ошибка удаления запроса {request_id}: {e}")
         return False
+
+
+# --- Добавьте в импорты в начало файла, если их еще нет ---
+# from aiogram import F
+# from aiogram.utils.keyboard import InlineKeyboardBuilder
+# import logging
+
+# --- Добавьте ЭТУ функцию в ваш файл ---
+@dp.callback_query(F.data.startswith("approve:") | F.data.startswith("reject:"))
+async def handle_manager_approval(callback: types.CallbackQuery):
+    """Обработка нажатий кнопок одобрения/отказа менеджера."""
+    action, request_id = callback.data.split(":", 1)
+    manager_id = callback.from_user.id
+
+    # --- Получение запроса из БД ---
+    request_data = await get_approval_request_by_id(request_id)
+    if not request_
+        await callback.answer("❌ Запрос не найден.", show_alert=True)
+        return
+
+    if request_data['manager_id'] != manager_id:
+        await callback.answer("❌ Это не ваш запрос.", show_alert=True)
+        return
+
+    if request_data['status'] != 'pending':
+        await callback.answer(f"❌ Запрос уже {request_data['status']}.", show_alert=True)
+        # Обновляем сообщение менеджера
+        try:
+            status_text = "одобрен" if request_data['status'] == 'approved' else "отклонен"
+            # Используем html.escape для безопасности
+            import html
+            escaped_text = html.escape(callback.message.text_markdown_v2 if callback.message.text_markdown_v2 else callback.message.text or "")
+            await callback.message.edit_text(
+                f"{escaped_text}\n\n<i>Статус уже изменен: {status_text}</i>",
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            logging.warning(f"Не удалось отредактировать сообщение менеджера: {e}")
+        return
+
+    user_id = request_data['user_id']
+    article = request_data['article']
+    shop = request_data['shop']
+
+    if action == "approve":
+        # --- Одобрение ---
+        success = await update_approval_request_status(request_id, 'approved')
+        if success:
+            # --- Уведомление пользователя ---
+            user_message = (
+                f"✅ <b>Менеджер одобрил заказ артикула {article} для магазина {shop}.</b>\n"
+                f"Нажмите кнопку ниже, чтобы продолжить оформление заказа."
+            )
+            # Используем InlineKeyboardBuilder
+            builder = InlineKeyboardBuilder()
+            builder.button(text="🔁 Продолжить заказ", callback_data=f"continue_order:{request_id}")
+            user_kb = builder.as_markup()
+
+            try:
+                await bot.send_message(chat_id=user_id, text=user_message, reply_markup=user_kb, parse_mode='HTML')
+                await callback.answer("✅ Заказ одобрен. Пользователь уведомлен.", show_alert=True)
+                
+                # --- Обновление сообщения менеджера ---
+                try:
+                    # Используем html.escape для безопасности
+                    import html
+                    escaped_text = html.escape(callback.message.text_markdown_v2 if callback.message.text_markdown_v2 else callback.message.text or "")
+                    await callback.message.edit_text(
+                        f"{escaped_text}\n\n✅ <b>Одобрено</b>",
+                        parse_mode='HTML'
+                    )
+                except Exception as e:
+                    logging.warning(f"Не удалось отредактировать сообщение менеджера: {e}")
+                    
+            except Exception as e:
+                logging.error(f"❌ Не удалось отправить уведомление пользователю {user_id}: {e}")
+                await callback.answer("✅ Заказ одобрен, но не удалось уведомить пользователя.", show_alert=True)
+        else:
+            await callback.answer("❌ Ошибка при обновлении статуса запроса.", show_alert=True)
+
+    elif action == "reject":
+        # --- Отказ ---
+        success = await update_approval_request_status(request_id, 'rejected')
+        if success:
+            # --- Уведомление пользователя ---
+            user_message = f"❌ Менеджер отказал в заказе артикула {article} для магазина {shop}."
+            try:
+                await bot.send_message(chat_id=user_id, text=user_message, reply_markup=main_menu_keyboard(user_id))
+                await callback.answer("❌ Заказ отклонен. Пользователь уведомлен.", show_alert=True)
+                
+                # --- Обновление сообщения менеджера ---
+                try:
+                    # Используем html.escape для безопасности
+                    import html
+                    escaped_text = html.escape(callback.message.text_markdown_v2 if callback.message.text_markdown_v2 else callback.message.text or "")
+                    await callback.message.edit_text(
+                        f"{escaped_text}\n\n❌ <b>Отклонено</b>",
+                        parse_mode='HTML'
+                    )
+                except Exception as e:
+                    logging.warning(f"Не удалось отредактировать сообщение менеджера: {e}")
+                    
+            except Exception as e:
+                logging.error(f"❌ Не удалось отправить уведомление об отказе пользователю {user_id}: {e}")
+                await callback.answer("❌ Заказ отклонен, но не удалось уведомить пользователя.", show_alert=True)
+        else:
+            await callback.answer("❌ Ошибка при обновлении статуса запроса.", show_alert=True)
 
 
 # ===================== ПРОФИЛИРОВАНИЕ ПАМЯТИ =====================
@@ -1523,9 +1630,11 @@ async def process_order_reason(message: types.Message, state: FSMContext):
             f"📝 Причина заказа: {reason}\n\n"
             f"Запрос ID: <code>{request_id}</code>"
         )
-        approve_btn = InlineKeyboardButton(text="✅ Одобрить", callback_data=f"approve:{request_id}")
-        reject_btn = InlineKeyboardButton(text="❌ Отказать", callback_data=f"reject:{request_id}")
-        manager_kb = InlineKeyboardMarkup(inline_keyboard=[[approve_btn, reject_btn]])
+        builder = InlineKeyboardBuilder()
+        builder.button(text="✅ Одобрить", callback_data=f"approve:{request_id}")
+        builder.button(text="❌ Отказать", callback_data=f"reject:{request_id}")
+        builder.adjust(2) # Расположить кнопки в 2 столбца
+        manager_kb = builder.as_markup()
 
         # --- Отправка сообщения менеджеру ---
         try:
