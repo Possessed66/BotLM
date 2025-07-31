@@ -971,6 +971,93 @@ async def handle_manager_approval(callback: types.CallbackQuery):
             await callback.answer("❌ Ошибка при обновлении статуса запроса.", show_alert=True)
 
 
+
+@dp.callback_query(F.data.startswith("continue_order:"))
+async def handle_continue_order(callback: types.CallbackQuery, state: FSMContext):
+    """Обработка нажатия кнопки 'Продолжить заказ' пользователем."""
+    # --- Парсинг callback_data ---
+    _, request_id = callback.data.split(":", 1)
+    user_id = callback.from_user.id
+
+    # --- Получение запроса из БД ---
+    request_data = await get_approval_request_by_id(request_id)
+    if not request_data:
+        await callback.answer("❌ Запрос не найден или уже обработан.", show_alert=True)
+        # Попробуем удалить сообщение, если оно устарело
+        try:
+            await callback.message.delete()
+        except Exception as e:
+            logging.debug(f"Не удалось удалить сообщение 'Продолжить заказ': {e}")
+        return
+
+    # --- Проверка принадлежности запроса пользователю ---
+    if request_data['user_id'] != user_id:
+        await callback.answer("❌ Это не ваш запрос.", show_alert=True)
+        return
+
+    # --- Проверка статуса запроса ---
+    # Сценарий: пользователь мог нажать кнопку до одобрения или после отказа
+    if request_data['status'] != 'approved':
+        if request_data['status'] == 'rejected':
+             await callback.answer("❌ Менеджер отказал в этом заказе.", show_alert=True)
+        else: # status == 'pending'
+             await callback.answer("❌ Запрос еще не одобрен менеджером.", show_alert=True)
+        # Можно удалить сообщение с кнопкой, если запрос уже не актуален
+        # try:
+        #     await callback.message.delete()
+        # except Exception:
+        #     pass
+        return
+
+    # --- Восстановление данных FSM ---
+    user_data_snapshot = request_data['user_data']
+    try:
+        # Восстанавливаем данные в состояние пользователя
+        await state.set_data(user_data_snapshot)
+        logging.info(f"✅ Данные FSM для пользователя {user_id} восстановлены из запроса {request_id}")
+        
+        # --- Удаление записи из БД ---
+        # Удаляем запись сразу после успешного восстановления,
+        # чтобы избежать повторного использования
+        await delete_approval_request(request_id)
+        
+        # --- Отправка уведомления пользователю ---
+        await callback.answer("✅ Данные восстановлены. Продолжаем заказ...", show_alert=True)
+        
+        # --- Продолжение процесса заказа ---
+        # Имитируем переход к следующему шагу - подтверждению.
+        restored_data = await state.get_data()
+        
+        # --- Формирование сообщения подтверждения ---
+        # Берем данные из восстановленного состояния
+        confirmation_response = (
+            "🔎 Проверьте данные заказа:\n"
+            f"Магазин: {restored_data.get('selected_shop', 'N/A')}\n"
+            f"📦 Артикул: {restored_data.get('article', 'N/A')}\n"
+            f"🏷️ Название: {restored_data.get('product_name', 'N/A')}\n"
+            # Убедитесь, что ключи соответствуют тем, что сохраняются в state
+            f"🔢 Кол-во: {restored_data.get('quantity', 'N/A')}\n" 
+            f"📝 Причина: {restored_data.get('order_reason', 'N/A')}\n"
+            # Добавьте другие поля, если они нужны для подтверждения
+        )
+        
+        # --- Отправка сообщения с подтверждением ---
+        # Удаляем предыдущее сообщение с кнопкой "Продолжить заказ" (опционально)
+        try:
+            await callback.message.delete()
+        except Exception as e:
+            logging.debug(f"Не удалось удалить сообщение с кнопкой 'Продолжить заказ': {e}")
+            
+        await callback.message.answer(confirmation_response, reply_markup=confirmation_keyboard())
+        await state.set_state(OrderStates.confirmation)
+        
+    except Exception as e:
+        logging.error(f"❌ Ошибка восстановления данных FSM для пользователя {user_id} из запроса {request_id}: {e}", exc_info=True)
+        await callback.answer("❌ Ошибка восстановления данных. Обратитесь к администратору.", show_alert=True)
+        # Удаляем запись из БД в случае ошибки, чтобы не мешала
+        await delete_approval_request(request_id)
+        # Очищаем состояние, так как восстановление не удалось
+        await state.clear()
 # =============================ПАРСЕР=================================
   
 def parse_supplier_data(record: dict) -> Dict[str, Any]:
@@ -1579,7 +1666,7 @@ async def process_order_reason(message: types.Message, state: FSMContext):
     if data.get('top_in_shop', '0') == '0':
         article = data.get('article')
         product_name = data.get('product_name', 'Неизвестно')
-        product_supplier = data.get('product_supplier', 'Неизвестно')
+        product_supplier = data.get('supplier_name', 'Неизвестно')
         # --- Исправлено: Используем 'department' из state ---
         department = data.get('department', 'Неизвестно') 
         
