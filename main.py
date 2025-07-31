@@ -324,6 +324,7 @@ class Registration(StatesGroup):
     position = State()
     shop = State()
 
+
 class OrderStates(StatesGroup):
     article_input = State()
     shop_selection = State()
@@ -332,14 +333,17 @@ class OrderStates(StatesGroup):
     order_reason_input = State()
     confirmation = State()
 
+
 class InfoRequest(StatesGroup):
     article_input = State()
+
 
 class AdminBroadcast(StatesGroup):
     message_input = State()
     target_selection = State()
     manual_ids = State()
     confirmation = State()
+
 
 class TaskStates(StatesGroup):
     # Состояния для добавления задач
@@ -362,6 +366,10 @@ class TaskStates(StatesGroup):
     view_stats = State()     # Просмотр статистики
     input_task_id_for_details = State() # Ввод ID для детализации
     review_selection = State()
+
+
+class ManagerApprovalStates(StatesGroup):
+    awaiting_reject_comment = State()
 
 # ===================== КЛАВИАТУРЫ =====================
 def create_keyboard(buttons: List[str], sizes: tuple, resize=True, one_time=False) -> types.ReplyKeyboardMarkup:
@@ -686,6 +694,7 @@ def initialize_approval_requests_table():
                     status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'approved', 'rejected'
                     user_data TEXT NOT NULL, -- Сериализованные данные FSM пользователя
                     manager_message_id INTEGER, -- ID сообщения у менеджера (для редактирования)
+                    reject_comment TEXT, --
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -707,29 +716,33 @@ def get_manager_id_by_department(department: str) -> Optional[int]:
         if not managers_data_pickled:
             logging.warning("Кэш менеджеров пуст.")
             return None
-            
+
         managers_records = pickle.loads(managers_data_pickled)
-        
-        # Предполагаемая структура листа "МЗ": "ID менеджера" | "Отдел"
-        # ВАЖНО: Сравнение идет по значению из ячейки Google Sheets (всегда str) 
-        # с department, который приходит из state (формат зависит от источника данных product_info)
-        # Для корректной работы убедитесь, что форматы совпадают (оба str или оба repr числа)
+
+        # Предполагаемая структура листа "МЗ":
+        # "ID менеджера" | "Отдел" | "Имя" | "Фамилия"
+        # Для корректной работы убедитесь, что форматы совпадают.
+        # Приведение к str для надежности сравнения.
         for record in managers_records:
-            # record.get("Отдел") - строка из Google Sheets
-            # department - значение из state (проверьте его тип в логах)
-            if str(record.get("Отдел")) == str(department): # Приведение к str для надежности
+            if str(record.get("Отдел")) == str(department):
                 manager_id_raw = record.get("ID менеджера")
                 if manager_id_raw:
                     try:
                         # Преобразуем ID из Google Sheets в int
-                        return int(manager_id_raw) 
+                        manager_info = {
+                            "id": int(manager_id_raw),
+                            "first_name": record.get("Имя", ""),     # Новое поле
+                            "last_name": record.get("Фамилия", ""),  # Новое поле
+                            "department": record.get("Отдел", "")
+                        }
+                        return manager_info
                     except (ValueError, TypeError):
                         logging.warning(f"Некорректный ID менеджера в записи: {record}")
                         continue
         logging.info(f"Менеджер для отдела '{department}' не найден в кэше.")
         return None
     except Exception as e:
-        logging.error(f"Ошибка получения ID менеджера по отделу '{department}': {e}")
+        logging.error(f"Ошибка получения информации о менеджере по отделу '{department}': {e}")
         return None
 
 
@@ -795,27 +808,44 @@ async def get_pending_approval_request(user_id: int) -> Optional[dict]:
 async def update_approval_request_status(
     request_id: str,
     status: str,
-    manager_message_id: Optional[int] = None
+    manager_message_id: Optional[int] = None,
+    reject_comment: Optional[str] = None
 ) -> bool:
     """Обновляет статус запроса на одобрение."""
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
+            
+            # Формируем SQL-запрос динамически в зависимости от переданных параметров
+            # Это базовый пример. В production лучше использовать более безопасные методы,
+            # например, отдельные подготовленные выражения для каждой комбинации параметров.
+            
+            # Определяем, какие параметры переданы, чтобы построить корректный SQL
+            
+            set_parts = ["status = ?", "updated_at = CURRENT_TIMESTAMP"]
+            params = [status] # status всегда передается
+            
             if manager_message_id is not None:
-                cursor.execute('''
-                    UPDATE approval_requests 
-                    SET status = ?, updated_at = CURRENT_TIMESTAMP, manager_message_id = ?
-                    WHERE request_id = ?
-                ''', (status, manager_message_id, request_id))
-            else:
-                cursor.execute('''
-                    UPDATE approval_requests 
-                    SET status = ?, updated_at = CURRENT_TIMESTAMP
-                    WHERE request_id = ?
-                ''', (status, request_id))
+                set_parts.append("manager_message_id = ?")
+                params.append(manager_message_id)
+                
+            if reject_comment is not None:
+                set_parts.append("reject_comment = ?")
+                params.append(reject_comment)
+                
+            # Добавляем request_id в конец списка параметров для WHERE
+            params.append(request_id)
+            
+            sql = f"UPDATE approval_requests SET {', '.join(set_parts)} WHERE request_id = ?"
+            
+            cursor.execute(sql, params)
             conn.commit()
+            
             if cursor.rowcount > 0:
                 logging.info(f"✅ Статус запроса {request_id} обновлен на '{status}'")
+                # Если был передан комментарий при отказе, логируем его
+                if status == 'rejected' and reject_comment:
+                    logging.info(f"   Причина отказа: {reject_comment}")
                 return True
             else:
                 logging.warning(f"⚠️ Запрос {request_id} не найден для обновления статуса")
@@ -941,26 +971,27 @@ async def handle_manager_approval(callback: types.CallbackQuery):
         else:
             await callback.answer("❌ Ошибка при обновлении статуса запроса.", show_alert=True)
 
-    elif action == "reject":
-        # --- Отказ ---
-        success = await update_approval_request_status(request_id, 'rejected')
-        if success:
-            # --- Уведомление пользователя ---
-            user_message = f"❌ Менеджер отказал в заказе артикула {article} для магазина {shop}."
-            try:
-                await bot.send_message(chat_id=user_id, text=user_message, reply_markup=main_menu_keyboard(user_id))
-                await callback.answer("❌ Заказ отклонен. Пользователь уведомлен.", show_alert=True)
-                
-                # --- Обновление сообщения менеджера ---
-                try:
-                # ИСПОЛЬЗУЕМ callback.message.text ВМЕСТО callback.message.text_markdown_v2
-                    original_text = callback.message.text or "Запрос на одобрение"
-                    await callback.message.edit_text(
-                        f"{original_text}\n\n❌ <b>Отклонено</b>",
-                        parse_mode='HTML'
-                    )
-                except Exception as e:
-                    logging.warning(f"Не удалось отредактировать сообщение менеджера: {e}")
+    elif action in ["start_reject", "request_reject"]:
+        # --- Запрашиваем комментарий у менеджера ---
+        try:
+            # Редактируем сообщение менеджера, убирая кнопки и запрашивая комментарий
+            original_text = callback.message.text or "Запрос на одобрение"
+            await callback.message.edit_text(
+                f"{original_text}\n\n📝 <b>Введите причину отказа в следующем сообщении:</b>",
+                parse_mode='HTML'
+                # reply_markup=None # Убираем кнопки
+            )
+            # Сохраняем request_id в состоянии менеджера
+            await state.set_state(ManagerApprovalStates.awaiting_reject_comment)
+            # Сохраняем request_id в данных состояния, чтобы потом его использовать
+            # Можно использовать user_id менеджера как ключ, но проще использовать FSMContext напрямую
+            # Для простоты, сохраним в данных состояния текущего менеджера
+            await state.update_data(current_reject_request_id=request_id)
+            
+            await callback.answer("Введите причину отказа в следующем сообщении.", show_alert=True)
+        except Exception as e:
+            logging.error(f"❌ Ошибка при запросе комментария от менеджера {manager_id}: {e}")
+            await callback.answer("❌ Ошибка. Не удалось запросить комментарий.", show_alert=True)
                     
             except Exception as e:
                 logging.error(f"❌ Не удалось отправить уведомление об отказе пользователю {user_id}: {e}")
@@ -968,6 +999,105 @@ async def handle_manager_approval(callback: types.CallbackQuery):
         else:
             await callback.answer("❌ Ошибка при обновлении статуса запроса.", show_alert=True)
 
+
+@dp.message(ManagerApprovalStates.awaiting_reject_comment)
+async def handle_manager_reject_comment(message: types.Message, state: FSMContext):
+    """Обработка текстового комментария менеджера при отказе."""
+    manager_id = message.from_user.id
+    reject_comment = message.text.strip()
+    
+    if not reject_comment:
+        await message.answer("📝 Комментарий не может быть пустым. Пожалуйста, введите причину отказа:")
+        return
+
+    # Получаем request_id из состояния менеджера
+    manager_state_data = await state.get_data()
+    request_id = manager_state_data.get('current_reject_request_id')
+    
+    if not request_id:
+        await message.answer("❌ Ошибка состояния. Пожалуйста, начните процесс заново.")
+        await state.clear() # Очищаем состояние менеджера
+        return
+
+    # --- Получение запроса из БД для проверки ---
+    request_data = await get_approval_request_by_id(request_id)
+    if not request_
+        await message.answer("❌ Запрос не найден.")
+        await state.clear()
+        return
+
+    # Проверка, что менеджер пытается обработать свой запрос
+    if request_data['manager_id'] != manager_id:
+        await message.answer("❌ Это не ваш запрос.")
+        await state.clear()
+        return
+
+    # Проверка, что запрос еще не обработан
+    if request_data['status'] != 'pending':
+        status_text = "одобрен" if request_data['status'] == 'approved' else "отклонен"
+        await message.answer(f"❌ Запрос уже {status_text}.")
+        await state.clear()
+        return
+
+    # --- Отказ с комментарием ---
+    # Обновляем статус запроса в БД, добавляя комментарий
+    # Предполагается, что update_approval_request_status была изменена для поддержки reject_comment
+    success = await update_approval_request_status(request_id, 'rejected', reject_comment=reject_comment)
+
+    if success:
+        user_id = request_data['user_id']
+        article = request_data['article']
+        shop = request_data['shop']
+        product_name = request_data.get('product_name', 'Неизвестно') # На всякий случай
+        rejecting_manager_id = request_data['manager_id']
+        
+        department_from_request = request_data.get('department', 'Неизвестный отдел')
+        rejecting_manager_info = get_manager_id_by_department(department_from_request)
+
+        if rejecting_manager_info:
+            rejecting_manager_name = (
+                f"{rejecting_manager_info.get('first_name', 'N/A')} "
+                f"{rejecting_manager_info.get('last_name', 'N/A')}".strip()
+            ) or "Неизвестный менеджер"
+    else:
+        # Если не удалось получить информацию (например, кэш пуст или изменился)
+        rejecting_manager_name = f"Менеджер отдела {department_from_request}"
+        # --- Уведомление пользователя с комментарием ---
+        user_message = (
+            f"❌ <b>{rejecting_manager_name} отказал в заказе артикула {article} для магазина {shop}.</b>\n"
+            f"<b>Название товара:</b> {product_name}\n"
+            f"<b>Причина отказа:</b> {reject_comment}"
+        )
+        try:
+            # Отправляем уведомление пользователю
+            await bot.send_message(
+                chat_id=user_id,
+                text=user_message,
+                reply_markup=main_menu_keyboard(user_id), # Или другая клавиатура для пользователя
+                parse_mode='HTML'
+            )
+            
+            # Подтверждение менеджеру
+            await message.answer(
+                "✅ Отказ оформлен. Пользователь уведомлен с комментарием.",
+                reply_markup=types.ReplyKeyboardRemove() # Или основная клавиатура менеджера
+            )
+            
+        except Exception as e:
+            logging.error(f"❌ Не удалось отправить уведомление об отказе пользователю {user_id}: {e}")
+            await message.answer(
+                "✅ Отказ оформлен, но не удалось уведомить пользователя.",
+                reply_markup=types.ReplyKeyboardRemove()
+            )
+    else:
+        # Ошибка при обновлении статуса в БД
+        await message.answer(
+            "❌ Ошибка при оформлении отказа в базе данных.",
+            reply_markup=types.ReplyKeyboardRemove()
+        )
+    
+    # В любом случае (успех или ошибка) очищаем состояние менеджера
+    await state.clear()
 
 
 @dp.callback_query(F.data.startswith("continue_order:"))
@@ -1662,7 +1792,11 @@ async def process_quantity_input(message: types.Message, state: FSMContext):
         department = product_info['Отдел'] 
         
         # --- Получение ID менеджера из кэша ---
-        manager_id = get_manager_id_by_department(department)
+        manager_id = manager_info['id']
+        manager_first_name = manager_info.get('first_name', 'N/A')
+        manager_last_name = manager_info.get('last_name', 'N/A')
+        
+        manager_full_name = f"{manager_first_name} {manager_last_name}".strip() or "Не указано"
         
         if not manager_id:
             await message.answer("❌ Не удалось определить менеджера для отдела товара. Свяжитесь с администратором.", reply_markup=main_menu_keyboard(message.from_user.id))
@@ -1690,7 +1824,7 @@ async def process_quantity_input(message: types.Message, state: FSMContext):
              await message.answer("❌ Ошибка при создании запроса на одобрение. Попробуйте позже.", reply_markup=main_menu_keyboard(message.from_user.id))
              await state.clear()
              return
-
+        
         # --- Формирование сообщения для менеджера ---
         reason_placeholder = "Причина будет указана пользователем позже" # Причина ещё не введена
         manager_message = (
@@ -1707,7 +1841,7 @@ async def process_quantity_input(message: types.Message, state: FSMContext):
         )
         builder = InlineKeyboardBuilder()
         builder.button(text="✅ Одобрить", callback_data=f"approve:{request_id}")
-        builder.button(text="❌ Отказать", callback_data=f"reject:{request_id}")
+        builder.button(text="❌ Отказать", callback_data=f"start_reject:{request_id}")
         builder.adjust(2) # Расположить 2 кнопки в одном ряду
         manager_kb = builder.as_markup()
 
@@ -1725,8 +1859,8 @@ async def process_quantity_input(message: types.Message, state: FSMContext):
         # --- Сообщение пользователю ---
         await message.answer(
             "⚠️ <b>Внимание, артикул в ТОП 0!</b>\n"
-            "Запрос на возможность заказа отправлен менеджеру. Вы можете продолжить работу с ботом. "
-            "После одобрения вы получите уведомление.",
+            f"Запрос на возможность заказа отправлен, его обработает МЗ отдела № {department}  <b>{manager_full_name}</b>.\n" 
+            f"Вы можете продолжить работу с ботом. После одобрения вы получите уведомление.",
             parse_mode='HTML',
             reply_markup=main_menu_keyboard(message.from_user.id)
         )
