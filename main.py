@@ -175,7 +175,41 @@ def initialize_approval_requests_table():
             logging.info("✅ Таблица approval_requests инициализирована")
     except Exception as e:
         logging.error(f"❌ Ошибка инициализации таблицы approval_requests: {e}")
+
+
+def get_manager_id_by_department(department: str) -> Optional[int]:
+    """Получает ID менеджера по названию отдела из кэша."""
+    try:
+        managers_data_pickled = cache.get("managers_data")
+        if not managers_data_pickled:
+            logging.warning("Кэш менеджеров пуст.")
+            return None
+            
+        managers_records = pickle.loads(managers_data_pickled)
         
+        # Предполагаемая структура листа "МЗ": "ID менеджера" | "Отдел"
+        # ВАЖНО: Сравнение идет по значению из ячейки Google Sheets (всегда str) 
+        # с department, который приходит из state (формат зависит от источника данных product_info)
+        # Для корректной работы убедитесь, что форматы совпадают (оба str или оба repr числа)
+        for record in managers_records:
+            # record.get("Отдел") - строка из Google Sheets
+            # department - значение из state (проверьте его тип в логах)
+            if str(record.get("Отдел")) == str(department): # Приведение к str для надежности
+                manager_id_raw = record.get("ID менеджера")
+                if manager_id_raw:
+                    try:
+                        # Преобразуем ID из Google Sheets в int
+                        return int(manager_id_raw) 
+                    except (ValueError, TypeError):
+                        logging.warning(f"Некорректный ID менеджера в записи: {record}")
+                        continue
+        logging.info(f"Менеджер для отдела '{department}' не найден в кэше.")
+        return None
+    except Exception as e:
+        logging.error(f"Ошибка получения ID менеджера по отделу '{department}': {e}")
+        return None
+
+
 async def create_approval_request(
     request_id: str,
     user_id: int,
