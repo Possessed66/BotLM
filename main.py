@@ -975,89 +975,74 @@ async def handle_manager_approval(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("continue_order:"))
 async def handle_continue_order(callback: types.CallbackQuery, state: FSMContext):
     """Обработка нажатия кнопки 'Продолжить заказ' пользователем."""
-    # --- Парсинг callback_data ---
     _, request_id = callback.data.split(":", 1)
     user_id = callback.from_user.id
 
     # --- Получение запроса из БД ---
     request_data = await get_approval_request_by_id(request_id)
-    if not request_data:
+    if not request_
         await callback.answer("❌ Запрос не найден или уже обработан.", show_alert=True)
-        # Попробуем удалить сообщение, если оно устарело
         try:
             await callback.message.delete()
-        except Exception as e:
-            logging.debug(f"Не удалось удалить сообщение 'Продолжить заказ': {e}")
+        except Exception:
+            pass
         return
 
-    # --- Проверка принадлежности запроса пользователю ---
     if request_data['user_id'] != user_id:
         await callback.answer("❌ Это не ваш запрос.", show_alert=True)
         return
 
-    # --- Проверка статуса запроса ---
-    # Сценарий: пользователь мог нажать кнопку до одобрения или после отказа
     if request_data['status'] != 'approved':
         if request_data['status'] == 'rejected':
              await callback.answer("❌ Менеджер отказал в этом заказе.", show_alert=True)
-        else: # status == 'pending'
+        else:
              await callback.answer("❌ Запрос еще не одобрен менеджером.", show_alert=True)
-        # Можно удалить сообщение с кнопкой, если запрос уже не актуален
-        # try:
-        #     await callback.message.delete()
-        # except Exception:
-        #     pass
         return
 
     # --- Восстановление данных FSM ---
     user_data_snapshot = request_data['user_data']
     try:
-        # Восстанавливаем данные в состояние пользователя
         await state.set_data(user_data_snapshot)
         logging.info(f"✅ Данные FSM для пользователя {user_id} восстановлены из запроса {request_id}")
         
-        # --- Удаление записи из БД ---
-        # Удаляем запись сразу после успешного восстановления,
-        # чтобы избежать повторного использования
-        await delete_approval_request(request_id)
+        article = user_data_snapshot.get('article', 'N/A')
+        product_name = user_data_snapshot.get('product_name', 'N/A')
+        department = user_data_snapshot.get('department', 'N/A')
+        quantity = user_data_snapshot.get('quantity', 'N/A')
         
+        # --- Удаление записи из БД ---
+        await delete_approval_request(request_id)
+
+        resume_message = (
+                f"✅ <b>Заказ ТОП 0 одобрен менеджером.</b>\n"
+                f"Продолжаем оформление заказа.\n\n"
+                f"<b>Информация о товаре:</b>\n"
+                f"📦 Артикул: {article}\n"
+                f"🏷️ Название: {product_name}\n"
+                f"🔢 Отдел: {department}\n"
+                f"🔢 Кол-во: {quantity}\n\n"
+                f"📝 Введите причину заказа:"
+            )
         # --- Отправка уведомления пользователю ---
         await callback.answer("✅ Данные восстановлены. Продолжаем заказ...", show_alert=True)
         
         # --- Продолжение процесса заказа ---
-        # Имитируем переход к следующему шагу - подтверждению.
-        restored_data = await state.get_data()
-        
-        # --- Формирование сообщения подтверждения ---
-        # Берем данные из восстановленного состояния
-        confirmation_response = (
-            "🔎 Проверьте данные заказа:\n"
-            f"Магазин: {restored_data.get('selected_shop', 'N/A')}\n"
-            f"📦 Артикул: {restored_data.get('article', 'N/A')}\n"
-            f"🏷️ Название: {restored_data.get('product_name', 'N/A')}\n"
-            # Убедитесь, что ключи соответствуют тем, что сохраняются в state
-            f"🔢 Кол-во: {restored_data.get('quantity', 'N/A')}\n" 
-            f"📝 Причина: {restored_data.get('order_reason', 'N/A')}\n"
-            # Добавьте другие поля, если они нужны для подтверждения
-        )
-        
-        # --- Отправка сообщения с подтверждением ---
-        # Удаляем предыдущее сообщение с кнопкой "Продолжить заказ" (опционально)
+        # После восстановления данных, переходим к вводу причины заказа
+        # Удаляем предыдущее сообщение с кнопкой (опционально)
         try:
             await callback.message.delete()
-        except Exception as e:
-            logging.debug(f"Не удалось удалить сообщение с кнопкой 'Продолжить заказ': {e}")
+        except Exception:
+            pass
             
-        await callback.message.answer(confirmation_response, reply_markup=confirm_keyboard())
-        await state.set_state(OrderStates.confirmation)
+        await callback.message.answer(resume_message, parse_mode='HTML', reply_markup=cancel_keyboard())
+        await state.set_state(OrderStates.order_reason_input)
         
     except Exception as e:
-        logging.error(f"❌ Ошибка восстановления данных FSM для пользователя {user_id} из запроса {request_id}: {e}", exc_info=True)
+        logging.error(f"❌ Ошибка восстановления данных FSM для пользователя {user_id} из запроса {request_id}: {e}")
         await callback.answer("❌ Ошибка восстановления данных. Обратитесь к администратору.", show_alert=True)
-        # Удаляем запись из БД в случае ошибки, чтобы не мешала
         await delete_approval_request(request_id)
-        # Очищаем состояние, так как восстановление не удалось
         await state.clear()
+        
 # =============================ПАРСЕР=================================
   
 def parse_supplier_data(record: dict) -> Dict[str, Any]:
@@ -1637,53 +1622,62 @@ async def continue_order_process(message: types.Message, state: FSMContext):
     await state.set_state(OrderStates.quantity_input)
 
 @dp.message(OrderStates.quantity_input)
-async def process_quantity(message: types.Message, state: FSMContext):
-    """Обработка ввода количества"""
-    quantity = message.text.strip()
-    
-    if not quantity.isdigit():
-        await message.answer("❌ Введите число!", reply_markup=cancel_keyboard())
+async def process_quantity_input(message: types.Message, state: FSMContext):
+    """Обработка введенного количества"""
+    try:
+        quantity = int(message.text)
+        if quantity <= 0:
+            await message.answer("❌ Количество должно быть положительным числом. Пожалуйста, введите еще раз:")
+            return
+    except ValueError:
+        await message.answer("❌ Некорректный формат количества. Пожалуйста, введите целое число:")
         return
-        
-    await state.update_data(quantity=int(quantity))
-    await message.answer("Введите номер заказа или причину:", 
-                        reply_markup=cancel_keyboard())
-    await state.set_state(OrderStates.order_reason_input)
 
-@dp.message(OrderStates.order_reason_input)
-async def process_order_reason(message: types.Message, state: FSMContext):
-    """Обработка причины заказа"""
-    reason = message.text.strip()
-    await state.update_data(order_reason=reason)
+    await state.update_data(quantity=quantity)
     
+    # --- Получение информации о товаре для проверки ТОП 0 ---
     data = await state.get_data()
-    selected_shop = data.get('selected_shop')
+    article = data['article']
+    selected_shop = data['selected_shop']
+    
+    # Получаем информацию о товаре
+    product_info = await get_product_info(article, selected_shop)
+    if not product_info:
+        await message.answer("❌ Не удалось получить информацию о товаре. Попробуйте позже.", reply_markup=main_menu_keyboard(message.from_user.id))
+        await state.clear()
+        return
 
-    if data.get('top_in_shop', '0') == '0':
-        article = data.get('article')
-        product_name = data.get('product_name', 'Неизвестно')
-        product_supplier = data.get('supplier_name', 'Неизвестно')
-        # --- Исправлено: Используем 'department' из state ---
-        department = data.get('department', 'Неизвестно') 
+    # Сохраняем информацию о товаре в state
+    await state.update_data(
+        product_name=product_info['Название'],
+        department=product_info['Отдел'], # <-- Используем 'department'
+        supplier_name=product_info['Поставщик'], # <-- Использем 'supplier_name' как в process_order_reason
+        order_date=product_info['Дата заказа'],
+        delivery_date=product_info['Дата поставки'],
+        top_in_shop=product_info.get('Топ в магазине', '0')
+    )
+    
+    # --- Проверка ТОП 0 ---
+    if product_info.get('Топ в магазине', '0') == '0':
+        product_name = product_info['Название']
+        product_supplier = product_info['Поставщик']
+        department = product_info['Отдел'] 
         
         # --- Получение ID менеджера из кэша ---
         manager_id = get_manager_id_by_department(department)
         
         if not manager_id:
-            # Если менеджер не найден, завершаем заказ
-            await message.answer(
-                "❌ Не удалось определить менеджера для отдела товара. Свяжитесь с администратором.",
-                reply_markup=main_menu_keyboard(message.from_user.id)
-            )
+            await message.answer("❌ Не удалось определить менеджера для отдела товара. Свяжитесь с администратором.", reply_markup=main_menu_keyboard(message.from_user.id))
             await state.clear()
             logging.warning(f"Менеджер для отдела '{department}' не найден в кэше МЗ.")
             return
 
         # --- Создание записи в БД ---
-        # Генерируем request_id здесь, чтобы использовать его в callback_data
         request_id = str(uuid.uuid4())
+        # Получаем обновленные данные state, включая quantity
+        current_state_data = await state.get_data() 
         success_db_create = await create_approval_request(
-            request_id=request_id, # Передаем сгенерированный ID
+            request_id=request_id,
             user_id=message.from_user.id,
             manager_id=manager_id,
             department=department,
@@ -1691,52 +1685,39 @@ async def process_order_reason(message: types.Message, state: FSMContext):
             shop=selected_shop,
             product_name=product_name,
             product_supplier=product_supplier,
-            user_data=data # Передаем все данные FSM
+            user_data=current_state_data # Передаем ВСЕ текущие данные FSM
         )
         
         if not success_db_create:
-             await message.answer(
-                 "❌ Ошибка при создании запроса на одобрение. Попробуйте позже.",
-                 reply_markup=main_menu_keyboard(message.from_user.id)
-             )
+             await message.answer("❌ Ошибка при создании запроса на одобрение. Попробуйте позже.", reply_markup=main_menu_keyboard(message.from_user.id))
              await state.clear()
              return
 
         # --- Формирование сообщения для менеджера ---
+        reason_placeholder = "Причина будет указана пользователем позже" # Причина ещё не введена
         manager_message = (
             f"🚨 <b>Запрос на одобрение заказа ТОП 0</b>\n"
             f"👤 Пользователь: @{message.from_user.username or 'N/A'} (ID: {message.from_user.id})\n"
             f"🏪 Магазин: {selected_shop}\n"
             f"📦 Артикул: {article}\n"
             f"🏷️ Название: {product_name}\n"
+            f"🔢 Кол-во: {quantity}\n" # Добавляем количество
             f"🏭 Поставщик: {product_supplier}\n"
             f"🔢 Отдел: {department}\n"
-            f"📝 Причина заказа: {reason}\n\n"
+            f"📝 Причина заказа: {reason_placeholder}\n\n"
             f"Запрос ID: <code>{request_id}</code>"
         )
-        builder = InlineKeyboardBuilder()
-        builder.button(text="✅ Одобрить", callback_data=f"approve:{request_id}")
-        builder.button(text="❌ Отказать", callback_data=f"reject:{request_id}")
-        builder.adjust(2) # Расположить кнопки в 2 столбца
-        manager_kb = builder.as_markup()
+        approve_btn = InlineKeyboardButton(text="✅ Одобрить", callback_data=f"approve:{request_id}")
+        reject_btn = InlineKeyboardButton(text="❌ Отказать", callback_data=f"reject:{request_id}")
+        manager_kb = InlineKeyboardMarkup(inline_keyboard=[[approve_btn, reject_btn]])
 
         # --- Отправка сообщения менеджеру ---
         try:
-            sent_message = await bot.send_message(
-                chat_id=manager_id,
-                text=manager_message,
-                reply_markup=manager_kb,
-                parse_mode='HTML'
-            )
-            # Обновляем запись в БД с ID сообщения менеджера
+            sent_message = await bot.send_message(chat_id=manager_id, text=manager_message, reply_markup=manager_kb, parse_mode='HTML')
             await update_approval_request_status(request_id, 'pending', sent_message.message_id)
         except Exception as e:
             logging.error(f"❌ Не удалось отправить запрос менеджеру {manager_id}: {e}")
-            await message.answer(
-                "❌ Не удалось отправить запрос менеджеру. Попробуйте позже.",
-                reply_markup=main_menu_keyboard(message.from_user.id)
-            )
-            # Удаляем запись запроса из БД при ошибке отправки
+            await message.answer("❌ Не удалось отправить запрос менеджеру. Попробуйте позже.", reply_markup=main_menu_keyboard(message.from_user.id))
             await delete_approval_request(request_id)
             await state.clear()
             return
@@ -1753,17 +1734,31 @@ async def process_order_reason(message: types.Message, state: FSMContext):
         # --- Очистка состояния пользователя ---
         await state.clear()
         return # Завершаем обработку, заказ приостановлен
+
+    # --- Если ТОП не 0, продолжаем как обычно ---
+    await message.answer("📝 Введите причину заказа:", reply_markup=cancel_keyboard())
+    await state.set_state(OrderStates.order_reason_input)
     
+
+@dp.message(OrderStates.order_reason_input)
+async def process_order_reason(message: types.Message, state: FSMContext):
+    """Обработка причины заказа (только для НЕ ТОП 0 или после одобрения)"""
+    reason = message.text.strip()
+    await state.update_data(order_reason=reason)
+    data = await state.get_data()
+    selected_shop = data.get('selected_shop')
+    
+    # Формируем сообщение подтверждения (без логики ТОП 0)
     response = (
         "🔎 Проверьте данные заказа:\n"
         f"Магазин: {selected_shop}\n"
         f"📦 Артикул: {data['article']}\n"
         f"🏷️ Название: {data['product_name']}\n"
-        f"🏭 Поставщик: {data['supplier_name']}\n" 
+        f"🏭 Поставщик: {data['supplier_name']}\n" # Используем supplier_name
         f"📅 Дата заказа: {data['order_date']}\n"
         f"🚚 Дата поставки: {data['delivery_date']}\n"
-        f"Количество: {data['quantity']}\n"
-        f"Номер заказа/Причина: {reason}\n"
+        f"🔢 Кол-во: {data['quantity']}\n"
+        f"📝 Причина: {reason}\n"
     )
     
     await message.answer(response, reply_markup=confirm_keyboard())
