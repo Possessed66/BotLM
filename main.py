@@ -1622,10 +1622,6 @@ async def continue_order_process(message: types.Message, state: FSMContext):
         f"🚚 Дата поставки: {product_info['Дата поставки']}\n"
     )
 
-    if product_info.get('Топ в магазине', '0') == '0':
-        response += "\n⚠️ <b>Внимание, артикул в ТОП 0!</b>\nСвяжись с менеджером для уточнения возможности заказа"
-
-    
     await state.update_data(
         product_name=product_info['Название'],
         department=product_info['Отдел'],
