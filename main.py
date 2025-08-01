@@ -1864,7 +1864,7 @@ async def process_quantity_input(message: types.Message, state: FSMContext):
         
         # --- Получение ID менеджера из кэша ---
         manager_info = get_manager_id_by_department(department)
-        if not manager_id:
+        if not manager_info:
             await message.answer("❌ Не удалось определить менеджера для отдела товара. Свяжитесь с администратором.", reply_markup=main_menu_keyboard(message.from_user.id))
             await state.clear()
             logging.warning(f"Менеджер для отдела '{department}' не найден в кэше МЗ.")
