@@ -897,7 +897,7 @@ async def delete_approval_request(request_id: str) -> bool:
 
 
 @dp.callback_query(F.data.startswith("approve:") | F.data.startswith("start_reject:"))
-async def handle_manager_approval(callback: types.CallbackQuery):
+async def handle_manager_approval(callback: types.CallbackQuery, state: FSMContext):
     """Обработка нажатий кнопок одобрения/отказа менеджера."""
     action, request_id = callback.data.split(":", 1)
     manager_id = callback.from_user.id
