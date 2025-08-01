@@ -1130,9 +1130,9 @@ async def handle_manager_reject_comment(message: types.Message, state: FSMContex
                 f"{rejecting_manager_info.get('first_name', 'N/A')} "
                 f"{rejecting_manager_info.get('last_name', 'N/A')}".strip()
             ) or "Неизвестный менеджер"
-    else:
-        # Если не удалось получить информацию (например, кэш пуст или изменился)
-        rejecting_manager_name = f"Менеджер отдела {department_from_request}"
+        else:
+            # Если не удалось получить информацию (например, кэш пуст или изменился)
+            rejecting_manager_name = f"Менеджер отдела {department_from_request}"
         # --- Уведомление пользователя с комментарием ---
         user_message = (
             f"❌ <b>{rejecting_manager_name} отказал в заказе артикула {article} для магазина {shop}.</b>\n"
