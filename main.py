@@ -973,6 +973,77 @@ async def handle_manager_approval(callback: types.CallbackQuery):
         else:
             await callback.answer("❌ Ошибка при обновлении статуса запроса.", show_alert=True)
 
+@dp.callback_query(F.data.startswith("approve:") | F.data.startswith("reject:"))
+async def handle_manager_approval(callback: types.CallbackQuery):
+    """Обработка нажатий кнопок одобрения/отказа менеджера."""
+    action, request_id = callback.data.split(":", 1)
+    manager_id = callback.from_user.id
+
+    # --- Получение запроса из БД ---
+    request_data = await get_approval_request_by_id(request_id)
+    if not request_data:
+        await callback.answer("❌ Запрос не найден.", show_alert=True)
+        return
+
+    if request_data['manager_id'] != manager_id:
+        await callback.answer("❌ Это не ваш запрос.", show_alert=True)
+        return
+
+    if request_data['status'] != 'pending':
+        await callback.answer(f"❌ Запрос уже {request_data['status']}.", show_alert=True)
+        # Обновляем сообщение менеджера
+        try:
+            status_text = "одобрен" if request_data['status'] == 'approved' else "отклонен"
+        # ИСПОЛЬЗУЕМ callback.message.text ВМЕСТО callback.message.text_markdown_v2
+            original_text = callback.message.text or "Запрос на одобрение"
+            await callback.message.edit_text(
+                f"{original_text}\n\n<i>Статус уже изменен: {status_text}</i>",
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            logging.warning(f"Не удалось отредактировать сообщение менеджера: {e}")
+        return
+
+    user_id = request_data['user_id']
+    article = request_data['article']
+    product_name = request_data['product_name']
+    shop = request_data['shop']
+
+    if action == "approve":
+        # --- Одобрение ---
+        success = await update_approval_request_status(request_id, 'approved')
+        if success:
+            # --- Уведомление пользователя ---
+            user_message = (
+                f"✅ <b>Менеджер одобрил заказ артикула {article} {product_name} для магазина {shop}.</b>\n"
+                f"Нажмите кнопку ниже, чтобы продолжить оформление заказа."
+            )
+            # Используем InlineKeyboardBuilder
+            builder = InlineKeyboardBuilder()
+            builder.button(text="🔁 Продолжить заказ", callback_data=f"continue_order:{request_id}")
+            user_kb = builder.as_markup()
+
+            try:
+                await bot.send_message(chat_id=user_id, text=user_message, reply_markup=user_kb, parse_mode='HTML')
+                await callback.answer("✅ Заказ одобрен. Пользователь уведомлен.", show_alert=True)
+                
+                # --- Обновление сообщения менеджера ---
+                try:
+                # ИСПОЛЬЗУЕМ callback.message.text ВМЕСТО callback.message.text_markdown_v2
+                    original_text = callback.message.text or "Запрос на одобрение"
+                    await callback.message.edit_text(
+                        f"{original_text}\n\n✅ <b>Одобрено</b>",
+                        parse_mode='HTML'
+                    )
+                except Exception as e:
+                    logging.warning(f"Не удалось отредактировать сообщение менеджера (одобрение): {e}")
+                    
+            except Exception as e:
+                logging.error(f"❌ Не удалось отправить уведомление пользователю {user_id}: {e}")
+                await callback.answer("✅ Заказ одобрен, но не удалось уведомить пользователя.", show_alert=True)
+        else:
+            await callback.answer("❌ Ошибка при обновлении статуса запроса.", show_alert=True)
+
     elif action in ["start_reject", "request_reject"]:
         # --- Запрашиваем комментарий у менеджера ---
         try:
@@ -994,6 +1065,12 @@ async def handle_manager_approval(callback: types.CallbackQuery):
         except Exception as e:
             logging.error(f"❌ Ошибка при запросе комментария от менеджера {manager_id}: {e}")
             await callback.answer("❌ Ошибка. Не удалось запросить комментарий.", show_alert=True)
+                    
+            except Exception as e:
+                logging.error(f"❌ Не удалось отправить уведомление об отказе пользователю {user_id}: {e}")
+                await callback.answer("❌ Заказ отклонен, но не удалось уведомить пользователя.", show_alert=True)
+        else:
+            await callback.answer("❌ Ошибка при обновлении статуса запроса.", show_alert=True)
                     
             except Exception as e:
                 logging.error(f"❌ Не удалось отправить уведомление об отказе пользователю {user_id}: {e}")
