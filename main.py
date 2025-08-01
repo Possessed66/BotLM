@@ -683,9 +683,11 @@ def initialize_approval_requests_table():
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
+            
+            # 1. Создание таблицы (без изменений, IF NOT EXISTS предотвратит ошибку, если таблица уже есть)
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS approval_requests (
-                    request_id TEXT PRIMARY KEY, -- Уникальный ID запроса
+                    request_id TEXT PRIMARY KEY,
                     user_id INTEGER NOT NULL,
                     manager_id INTEGER NOT NULL,
                     department TEXT NOT NULL,
@@ -694,21 +696,36 @@ def initialize_approval_requests_table():
                     product_name TEXT,
                     product_supplier TEXT,
                     status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'approved', 'rejected'
-                    user_data TEXT NOT NULL, -- Сериализованные данные FSM пользователя
-                    manager_message_id INTEGER, -- ID сообщения у менеджера (для редактирования)
-                    reject_comment TEXT, --
+                    user_data TEXT NOT NULL,
+                    manager_message_id INTEGER,
+                    reject_comment TEXT, -- <-- Новый столбец
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
-            # Создаем индекс для быстрого поиска по user_id и status
+            
+            # 2. Проверка и добавление столбца reject_comment, если его нет
+            # Получаем информацию о столбцах таблицы
+            cursor.execute("PRAGMA table_info(approval_requests)")
+            columns = [info[1] for info in cursor.fetchall()] # info[1] - это имя столбца
+            
+            if 'reject_comment' not in columns:
+                logging.info("Добавление столбца 'reject_comment' в таблицу 'approval_requests'...")
+                cursor.execute("ALTER TABLE approval_requests ADD COLUMN reject_comment TEXT")
+                logging.info("Столбец 'reject_comment' успешно добавлен.")
+            else:
+                logging.debug("Столбец 'reject_comment' уже существует в таблице 'approval_requests'.")
+            
+            # 3. Создание индекса (без изменений)
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_user_status ON approval_requests(user_id, status)
             ''')
+            
             conn.commit()
-            logging.info("✅ Таблица approval_requests инициализирована")
+            logging.info("✅ Таблица approval_requests проверена/инициализирована")
     except Exception as e:
-        logging.error(f"❌ Ошибка инициализации таблицы approval_requests: {e}")
+        logging.error(f"❌ Ошибка инициализации/обновления таблицы approval_requests: {e}")
+        # Важно не подавлять эту ошибку, чтобы знать о проблемах со схемой БД
 
 
 def get_manager_id_by_department(department: str) -> Optional[int]:
