@@ -1092,7 +1092,7 @@ async def handle_manager_reject_comment(message: types.Message, state: FSMContex
 
     # --- Получение запроса из БД для проверки ---
     request_data = await get_approval_request_by_id(request_id)
-    if not request_
+    if not request_data:
         await message.answer("❌ Запрос не найден.")
         await state.clear()
         return
