@@ -902,7 +902,7 @@ async def delete_approval_request(request_id: str) -> bool:
 # import logging
 
 # --- Добавьте ЭТУ функцию в ваш файл ---
-@dp.callback_query(F.data.startswith("approve:") | F.data.startswith("reject:"))
+@dp.callback_query(F.data.startswith("approve:") | F.data.startswith("start_reject:"))
 async def handle_manager_approval(callback: types.CallbackQuery):
     """Обработка нажатий кнопок одобрения/отказа менеджера."""
     action, request_id = callback.data.split(":", 1)
