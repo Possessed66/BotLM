@@ -1066,9 +1066,6 @@ async def handle_manager_approval(callback: types.CallbackQuery):
             logging.error(f"❌ Ошибка при запросе комментария от менеджера {manager_id}: {e}")
             await callback.answer("❌ Ошибка. Не удалось запросить комментарий.", show_alert=True)
                     
-            except Exception as e:
-                logging.error(f"❌ Не удалось отправить уведомление об отказе пользователю {user_id}: {e}")
-                await callback.answer("❌ Заказ отклонен, но не удалось уведомить пользователя.", show_alert=True)
         else:
             await callback.answer("❌ Ошибка при обновлении статуса запроса.", show_alert=True)
                     
