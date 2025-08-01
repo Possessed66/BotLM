@@ -1863,17 +1863,17 @@ async def process_quantity_input(message: types.Message, state: FSMContext):
         department = product_info['Отдел'] 
         
         # --- Получение ID менеджера из кэша ---
-        manager_id = manager_info['id']
-        manager_first_name = manager_info.get('first_name', 'N/A')
-        manager_last_name = manager_info.get('last_name', 'N/A')
-        
-        manager_full_name = f"{manager_first_name} {manager_last_name}".strip() or "Не указано"
-        
+        manager_info = get_manager_info_by_department(department)
         if not manager_id:
             await message.answer("❌ Не удалось определить менеджера для отдела товара. Свяжитесь с администратором.", reply_markup=main_menu_keyboard(message.from_user.id))
             await state.clear()
             logging.warning(f"Менеджер для отдела '{department}' не найден в кэше МЗ.")
             return
+
+        manager_id = manager_info['id']
+        manager_first_name = manager_info.get('first_name', 'N/A')
+        manager_last_name = manager_info.get('last_name', 'N/A')
+        manager_full_name = f"{manager_first_name} {manager_last_name}".strip() or "Не указано"
 
         # --- Создание записи в БД ---
         request_id = str(uuid.uuid4())
