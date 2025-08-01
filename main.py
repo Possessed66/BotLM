@@ -1072,11 +1072,6 @@ async def handle_manager_approval(callback: types.CallbackQuery):
         else:
             await callback.answer("❌ Ошибка при обновлении статуса запроса.", show_alert=True)
                     
-            except Exception as e:
-                logging.error(f"❌ Не удалось отправить уведомление об отказе пользователю {user_id}: {e}")
-                await callback.answer("❌ Заказ отклонен, но не удалось уведомить пользователя.", show_alert=True)
-        else:
-            await callback.answer("❌ Ошибка при обновлении статуса запроса.", show_alert=True)
 
 
 @dp.message(ManagerApprovalStates.awaiting_reject_comment)
