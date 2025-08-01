@@ -606,6 +606,7 @@ async def load_tasks() -> Dict[str, Dict[str, Any]]:
             
             # Обработка назначенных пользователей
             assigned_raw = str(row.get("Назначена", "")).strip()
+            logging.debug(f"Задача {task_id}: Сырое значение 'Назначена' = '{assigned_raw}' (тип: {type(assigned_raw)})")
             if assigned_raw:
                 # Разбиваем строку, очищаем и фильтруем ID
                 assigned_user_ids = [
@@ -613,13 +614,15 @@ async def load_tasks() -> Dict[str, Dict[str, Any]]:
                     (uid.strip() for uid in assigned_raw.split(","))
                     if uid_str.isdigit()
                 ]
+                logging.debug(f"Задача {task_id}: Обработанные ID 'Назначена' = {assigned_user_ids} (типы: {[type(uid) for uid in assigned_user_ids]})")
+                
             else:
                 assigned_user_ids = []
 
             # --- Исправлено и Улучшено: Обработка выполненных пользователей с поддержкой старого формата ---
             completed_user_ids = []
             statuses_raw = str(row.get("Статусы", "{}")).strip()
-            # logging.debug(f"Задача {task_id}: Сырой статус = '{statuses_raw}'")
+            logging.debug(f"Задача {task_id}: Сырой статус = '{statuses_raw}'")
             if statuses_raw:
                 try:
                     statuses_data = json.loads(statuses_raw)
@@ -648,8 +651,7 @@ async def load_tasks() -> Dict[str, Dict[str, Any]]:
                 except (json.JSONDecodeError, TypeError, ValueError) as e:
                     logging.warning(f"Ошибка парсинга 'Статусы' для задачи {task_id}: {e}. Считается пустым.")
                     completed_user_ids = []
-            # else:
-            #     logging.debug(f"Задача {task_id}: Статусы пусты.")
+       
             
             tasks[task_id] = {
                 "text": str(row.get("Текст", "")).strip(),
@@ -661,8 +663,8 @@ async def load_tasks() -> Dict[str, Dict[str, Any]]:
                 # --- Исправлено: Теперь всегда используем ключ "completed_by" в памяти ---
                 "completed_by": completed_user_ids, 
             }
-            # logging.debug(f"Задача {task_id} добавлена в словарь tasks. completed_by: {tasks[task_id]['completed_by']}")
             
+            logging.debug(f"Задача {task_id}: Финальное значение 'assigned_to' = {tasks[task_id]['assigned_to']} (типы: {[type(uid) for uid in tasks[task_id]['assigned_to']]})")
         logging.info(f"✅ Загружено {len(tasks)} задач из Google Sheets")
         
     except Exception as e: # <-- Этот except корректно завершает блок try
