@@ -5,6 +5,7 @@ import io
 import re
 import gc
 import asyncio
+import inspect
 import logging
 import traceback
 import time
@@ -1227,6 +1228,16 @@ def calculate_delivery_date(supplier_data: dict) -> Tuple[str, str]:
 async def get_product_info(article: str, shop: str) -> Optional[Dict[str, Any]]:
     """Получение информации о товаре с расширенным логированием, используя SQLite"""
     try:
+        stack = inspect.stack()
+        # Обычно нас интересует вызывающая функция, которая находится под текущей (stack[1])
+        # stack[0] - это текущая функция get_product_info
+        caller_frame = stack[1] 
+        caller_info = f"{caller_frame.filename}:{caller_frame.lineno} in {caller_frame.function}"
+        logging.info(f"🔍 [TRACE] get_product_info вызвана из: {caller_info}")
+        
+        for i, frame in enumerate(stack[1:4]): # Показать 3 уровня вызова
+             logging.info(f"  {i+1}. {frame.filename}:{frame.lineno} in {frame.function}")
+        
         logging.info(f"🔍 Поиск товара: артикул={article}, магазин={shop}")
         
         # === 1. Получение данных товара из SQLite ===
