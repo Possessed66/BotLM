@@ -451,6 +451,18 @@ def get_task_keyboard(task_id: str) -> types.InlineKeyboardMarkup:
     )
     return builder.as_markup()
 
+
+def quick_shop_selection_keyboard() -> types.ReplyKeyboardMarkup:
+    """Клавиатура для быстрого выбора из 3 магазинов."""
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="🏪 Магазин 7")
+    builder.button(text="🏪 Магазин 14")
+    builder.button(text="🏪 Магазин 94")
+    builder.button(text="❌ Отмена") # Добавим кнопку отмены
+    builder.adjust(3, 1) # 3 кнопки в первом ряду, 1 во втором
+    return builder.as_markup(resize_keyboard=True)
+
+
 # ===================== СЕРВИСНЫЕ ФУНКЦИИ =====================
 async def notify_admins(message: str) -> None:
     """Уведомление администраторов"""
@@ -1700,39 +1712,36 @@ async def process_article_input(message: types.Message, state: FSMContext):
         return
         
     await state.update_data(article=article)
-    await message.answer("📌 Выберите магазин для заказа:", 
-                        reply_markup=shop_selection_keyboard())
+    await message.answer("📌 Выберите магазин для заказа:", reply_markup=quick_shop_selection_keyboard())
     await state.set_state(OrderStates.shop_selection)
 
 
 @dp.message(OrderStates.shop_selection)
 async def process_shop_selection(message: types.Message, state: FSMContext):
-    """Обработка выбора магазина"""
+    """Обработка выбора магазина из 3 вариантов"""
     user_data = await get_user_data(str(message.from_user.id))
     
-    if message.text == "Использовать мой магазин":
-        selected_shop = user_data['shop']
-    elif message.text == "Выбрать другой":
-        await message.answer("🏪 Введите номер магазина (только цифры, без ведущих нулей):")
-        await state.set_state(OrderStates.shop_input)
-        return
-    else:
-        await message.answer("❌ Неверный выбор. Используйте кнопки меню",
-                            reply_markup=shop_selection_keyboard())
-        return
+    # Словарь для сопоставления текста кнопки с номером магазина
+    shop_mapping = {
+        "🏪 Магазин 7": "7",
+        "🏪 Магазин 14": "14",
+        "🏪 Магазин 94": "94"
+    }
     
-    await state.update_data(selected_shop=selected_shop)
-    await continue_order_process(message, state)
-
-@dp.message(OrderStates.shop_input)
-async def process_custom_shop(message: types.Message, state: FSMContext):
-    """Обработка ввода номера магазина"""
-    shop = message.text.strip()
-    if not shop.isdigit() or shop.startswith('0'):
-        await message.answer("❗ Номер магазина должен быть целым числом без ведущих нулей. Повторите ввод:")
-        return
-    await state.update_data(selected_shop=shop)
-    await continue_order_process(message, state)
+    if message.text in shop_mapping:
+        selected_shop = shop_mapping[message.text]
+        await state.update_data(selected_shop=selected_shop)
+        await continue_order_process(message, state)
+    elif message.text == "❌ Отмена":
+        await message.answer("❌ Выбор магазина отменен.", reply_markup=main_menu_keyboard(message.from_user.id))
+        await state.clear()
+    else:
+        # Если пользователь ввел что-то другое или нажал не ту кнопку
+        await message.answer(
+            "❌ Неверный выбор. Пожалуйста, выберите один из вариантов:",
+            reply_markup=quick_shop_selection_keyboard()
+        )
+        
 
 async def continue_order_process(message: types.Message, state: FSMContext):
     """Продолжение обработки заказа после выбора магазина"""
