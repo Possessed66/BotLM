@@ -63,6 +63,7 @@ def get_db_connection():
         if conn:
             conn.close()
 
+
 async def global_error_handler(event: types.ErrorEvent, bot: Bot):
     """Централизованный обработчик всех необработанных исключений"""
     exception = event.exception
@@ -264,6 +265,7 @@ logging.basicConfig(
 # Сервисный режим
 SERVICE_MODE = True
 ADMINS = [122086799]
+worker_running = True
 
 # Кэширование
 CACHE_TTL = 43200  # 12 часов
@@ -550,9 +552,26 @@ async def log_user_activity(user_id: str, command: str, event_type: str = "comma
         logging.error(f"Ошибка логирования активности: {str(e)}")
 
 
+@dp.message(F.from_user.id.in_(ADMINS), F.text == "/queue_stats")
+async def handle_queue_stats(message: types.Message):
+    """Показывает статистику очереди заказов админу."""
+    try:
+        stats = get_order_queue_stats()
+        response = (
+            f"📊 *Статистика очереди заказов:*\n"
+            f"• В ожидании: `{stats['pending']}`\n"
+            f"• В обработке: `{stats['processing']}`\n"
+            f"• Успешно обработано: `{stats['completed']}`\n"
+            f"• С ошибками: `{stats['failed']}`\n"
+        )
+        await message.answer(response, parse_mode='Markdown')
+    except Exception as e:
+        logging.error(f"Ошибка при получении статистики очереди: {e}")
+        await message.answer("❌ Ошибка получения статистики.")
+        
 
 
-##Задачи\\\\\\\\\\\\\\\\\
+# ===================== ЗАДАЧИ =====================
 def normalize_task_row(task_id: str, row: dict) -> dict:
     return {
         "text": row.get("Текст", ""),
@@ -1194,7 +1213,249 @@ async def handle_continue_order(callback: types.CallbackQuery, state: FSMContext
         await callback.answer("❌ Ошибка восстановления данных. Обратитесь к администратору.", show_alert=True)
         await delete_approval_request(request_id)
         await state.clear()
-        
+
+
+# =============================ОЧЕРЕДЬ ЗАКАЗОВ=================================
+
+def initialize_order_queue_table():
+    """Создает таблицу для очереди заказов."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            # Создаем таблицу очереди заказов
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS order_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    order_data TEXT NOT NULL, -- JSON-строка с данными заказа
+                    status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'processing', 'completed', 'failed'
+                    attempt_count INTEGER DEFAULT 0, -- Количество попыток обработки
+                    last_attempt TIMESTAMP, -- Дата/время последней попытки
+                    error_message TEXT, -- Сообщение об ошибке последней попытки
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    processed_at TIMESTAMP NULL -- Дата/время успешной обработки
+                )
+            ''')
+            
+            # Создаем индекс для быстрого поиска ожидающих заказов
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_order_queue_status ON order_queue(status)
+            ''')
+            
+            conn.commit()
+            logging.info("✅ Таблица order_queue инициализирована")
+    except Exception as e:
+        logging.error(f"❌ Ошибка инициализации таблицы order_queue: {e}")
+
+
+# --- Функция для добавления заказа в очередь ---
+async def add_order_to_queue(user_id: int, order_data: dict) -> bool:
+    """Добавляет заказ в очередь на обработку."""
+    try:
+        import json
+        serialized_data = json.dumps(order_data, ensure_ascii=False, default=str)
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO order_queue (user_id, order_data, status)
+                VALUES (?, ?, 'pending')
+            ''', (user_id, serialized_data))
+            conn.commit()
+            logging.info(f"✅ Заказ для пользователя {user_id} добавлен в очередь (ID записи: {cursor.lastrowid})")
+            return True
+    except Exception as e:
+        logging.error(f"❌ Ошибка добавления заказа в очередь для пользователя {user_id}: {e}")
+        return False
+
+
+# --- Функция для получения заказов из очереди ---
+def get_pending_orders(limit: int = 10) -> list:
+    """Получает список заказов, ожидающих обработки."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, user_id, order_data, attempt_count
+                FROM order_queue 
+                WHERE status = 'pending' 
+                ORDER BY created_at ASC
+                LIMIT ?
+            ''', (limit,))
+            rows = cursor.fetchall()
+            orders = []
+            for row in rows:
+                try:
+                    order_data = json.loads(row['order_data']) if isinstance(row['order_data'], str) else row['order_data']
+                    orders.append({
+                        'id': row['id'],
+                        'user_id': row['user_id'],
+                        'order_data': order_data,
+                        'attempt_count': row['attempt_count']
+                    })
+                except json.JSONDecodeError as je:
+                    logging.error(f"❌ Ошибка десериализации order_data для записи {row['id']}: {je}")
+                    # Можно пометить заказ как 'failed' здесь, если нужно
+            return orders
+    except Exception as e:
+        logging.error(f"❌ Ошибка получения заказов из очереди: {e}")
+        return []
+
+
+# --- Функция для обновления статуса заказа ---
+def update_order_status(order_id: int, status: str, error_message: str = None) -> bool:
+    """Обновляет статус заказа в очереди."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            if status == 'completed':
+                cursor.execute('''
+                    UPDATE order_queue 
+                    SET status = ?, processed_at = CURRENT_TIMESTAMP, last_attempt = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                ''', (status, order_id))
+            elif status == 'failed':
+                cursor.execute('''
+                    UPDATE order_queue 
+                    SET status = ?, error_message = ?, attempt_count = attempt_count + 1, last_attempt = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                ''', (status, error_message, order_id))
+            else: # pending или processing
+                cursor.execute('''
+                    UPDATE order_queue 
+                    SET status = ?, last_attempt = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                ''', (status, order_id))
+            conn.commit()
+            if cursor.rowcount > 0:
+                logging.info(f"✅ Статус заказа {order_id} обновлен на '{status}'")
+                return True
+            else:
+                logging.warning(f"⚠️ Заказ {order_id} не найден для обновления статуса")
+                return False
+    except Exception as e:
+        logging.error(f"❌ Ошибка обновления статуса заказа {order_id}: {e}")
+        return False
+
+# --- Функция для получения количества заказов по статусам (для мониторинга) ---
+def get_order_queue_stats() -> dict:
+    """Получает статистику по очереди заказов."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT status, COUNT(*) as count
+                FROM order_queue
+                GROUP BY status
+            ''')
+            rows = cursor.fetchall()
+            stats = {row['status']: row['count'] for row in rows}
+            # Добавляем нули для отсутствующих статусов
+            for status in ['pending', 'processing', 'completed', 'failed']:
+                stats.setdefault(status, 0)
+            return stats
+    except Exception as e:
+        logging.error(f"❌ Ошибка получения статистики очереди заказов: {e}")
+        return {'pending': 0, 'processing': 0, 'completed': 0, 'failed': 0}
+
+
+async def process_order_queue(bot_instance):
+    """Фоновый обработчик очереди заказов."""
+    logging.info("🚀 Запущен обработчик очереди заказов (воркер)")
+    
+    while worker_running:
+        try:
+            # --- Получаем заказы из очереди ---
+            pending_orders = get_pending_orders(limit=5) # Обрабатываем до 5 заказов за раз
+            
+            if not pending_orders:
+                # Если заказов нет, немного ждем
+                await asyncio.sleep(120) # Пауза 5 минут
+                continue
+            
+            logging.info(f"📥 Найдено {len(pending_orders)} заказов для обработки.")
+            
+            # --- Обрабатываем каждый заказ по очереди ---
+            for order_item in pending_orders:
+                order_id = order_item['id']
+                user_id = order_item['user_id']
+                order_data = order_item['order_data']
+                attempt_count = order_item['attempt_count']
+                
+                # Помечаем заказ как "в обработке"
+                update_order_status(order_id, 'processing')
+                logging.info(f"⚙️ Начало обработки заказа ID {order_id} (попытка {attempt_count + 1}) для пользователя {user_id}...")
+                
+                try:
+                    # --- ОСНОВНАЯ ОПЕРАЦИЯ ЗАПИСИ В GOOGLE SHEETS ---
+                    department_sheet = orders_spreadsheet.worksheet(order_data['department'])
+                    next_row = len(department_sheet.col_values(1)) + 1
+
+                    updates = [
+                        {'range': f'A{next_row}', 'values': [[order_data['selected_shop']]]},
+                        {'range': f'B{next_row}', 'values': [[int(order_data['article'])]]},
+                        {'range': f'C{next_row}', 'values': [[order_data['order_reason']]]},
+                        {'range': f'D{next_row}', 'values': [[datetime.now().strftime("%d.%m.%Y %H:%M")]]},
+                        {'range': f'E{next_row}', 'values': [[f"{order_data['user_name']}, {order_data['user_position']}"]]},
+                        {'range': f'K{next_row}', 'values': [[int(order_data['quantity'])]]},
+                        {'range': f'R{next_row}', 'values': [[user_id]]}
+                    ]
+                    department_sheet.batch_update(updates)
+                    # --- КОНЕЦ ОПЕРАЦИИ ЗАПИСИ ---
+                    
+                    # --- УСПЕХ ---
+                    update_order_status(order_id, 'completed')
+                    logging.info(f"✅ Заказ ID {order_id} для пользователя {user_id} успешно записан в таблицу {order_data['department']} строка {next_row}")
+                    
+                    # (Опционально) Уведомляем пользователя об успехе
+                    # try:
+                    #     await bot_instance.send_message(user_id, "✅ Ваш заказ успешно записан в таблицу!")
+                    # except Exception as user_notify_err:
+                    #     logging.warning(f"Не удалось уведомить пользователя {user_id} об успешной записи заказа: {user_notify_err}")
+                    
+                except Exception as e:
+                    # --- ОШИБКА ---
+                    error_msg = str(e)
+                    logging.error(f"❌ Ошибка при записи заказа ID {order_id} для пользователя {user_id}: {error_msg}", exc_info=True)
+                    
+                    # Обновляем статус на 'failed' и сохраняем ошибку
+                    update_order_status(order_id, 'failed', error_message=error_msg)
+                    
+                    # Если это была первая попытка, уведомляем админа
+                    if attempt_count == 0:
+                        for admin_id in ADMINS:
+                            try:
+                                admin_msg = (
+                                    f"🚨 Ошибка записи заказа из очереди!\n"
+                                    f"• ID записи в БД: <code>{order_id}</code>\n"
+                                    f"• Пользователь: <code>{user_id}</code>\n"
+                                    f"• Артикул: <code>{order_data.get('article', 'N/A')}</code>\n"
+                                    f"• Магазин: <code>{order_data.get('selected_shop', 'N/A')}</code>\n"
+                                    f"• Ошибка: <pre>{error_msg[:300]}</pre>"
+                                )
+                                await bot_instance.send_message(admin_id, admin_msg, parse_mode='HTML')
+                            except Exception as admin_notify_err:
+                                logging.error(f"Не удалось уведомить админа {admin_id}: {admin_notify_err}")
+                                
+            # Небольшая пауза между циклами обработки
+            await asyncio.sleep(1)
+            
+        except asyncio.CancelledError:
+            logging.info("🛑 Обработчик очереди заказов отменен.")
+            break
+        except Exception as worker_error:
+            logging.critical(f"🔥 Критическая ошибка в обработчике очереди заказов: {worker_error}", exc_info=True)
+            # Можно отправить уведомление админам о краше воркера
+            for admin_id in ADMINS:
+                try:
+                    await bot_instance.send_message(admin_id, f"🔥 Критическая ошибка в обработчике очереди заказов: {worker_error}")
+                except:
+                    pass
+            # Ждем перед повторным запуском цикла
+            await asyncio.sleep(10)
+
+
+
+
 # =============================ПАРСЕР=================================
   
 def parse_supplier_data(record: dict) -> Dict[str, Any]:
@@ -1932,37 +2193,49 @@ async def process_order_reason(message: types.Message, state: FSMContext):
 
 @dp.message(OrderStates.confirmation, F.text == "✅ Подтвердить")
 async def final_confirmation(message: types.Message, state: FSMContext):
-    """Подтверждение заказа"""
+    """Подтверждение заказа с добавлением в очередь."""
+    
+    # --- Получаем данные заказа ---
     await state.update_data(last_activity=datetime.now().isoformat())
     data = await state.get_data()
     
-    
     # Проверка обязательных полей
-    required_fields = ['selected_shop', 'article', 'order_reason', 'quantity', 'department']
-    for field in required_fields:
-        if field not in data:
-            raise ValueError(f"Отсутствует поле: {field}")
-        
-        # Получаем лист отдела
-    department_sheet = orders_spreadsheet.worksheet(data['department'])
-    next_row = len(department_sheet.col_values(1)) + 1
-        
-        # Формируем обновления
-    updates = [
-        {'range': f'A{next_row}', 'values': [[data['selected_shop']]]},
-        {'range': f'B{next_row}', 'values': [[int(data['article'])]]},
-        {'range': f'C{next_row}', 'values': [[data['order_reason']]]},
-        {'range': f'D{next_row}', 'values': [[datetime.now().strftime("%d.%m.%Y %H:%M")]]},
-        {'range': f'E{next_row}', 'values': [[f"{data['user_name']}, {data['user_position']}"]]},
-        {'range': f'K{next_row}', 'values': [[int(data['quantity'])]]},
-        {'range': f'R{next_row}', 'values': [[int(message.from_user.id)]]}
-    ]
+    required_fields = ['selected_shop', 'article', 'order_reason', 'quantity', 'department', 'user_name', 'user_position']
+    missing_fields = [field for field in required_fields if field not in data]
+    if missing_fields:
+        error_msg = f"❌ Ошибка оформления заказа: отсутствуют обязательные поля {missing_fields}. Попробуйте заново."
+        logging.error(f"final_confirmation: {error_msg} для user_id={message.from_user.id}")
+        await message.answer(error_msg, reply_markup=main_menu_keyboard(message.from_user.id))
+        await state.clear()
+        return
 
-    # Записываем данные
-    department_sheet.batch_update(updates)
-    await message.answer("✅ Заказ успешно сохранен!", 
-    reply_markup=main_menu_keyboard(message.from_user.id))
-    await log_user_activity(message.from_user.id, "Подтвердить заказ", "confirmation")
+    # --- НЕМЕДЛЕННО информируем пользователя ---
+    await message.answer("✅ Заказ отправлен!", 
+                         reply_markup=main_menu_keyboard(message.from_user.id))
+    
+    
+    # --- Добавляем заказ в очередь ---
+    user_id = message.from_user.id
+    data_copy = data.copy() # Создаем копию для передачи в БД
+    
+    success_enqueue = await add_order_to_queue(user_id, data_copy)
+    
+    if not success_enqueue:
+        # Если не удалось добавить в очередь, логируем критическую ошибку
+        critical_error_msg = f"КРИТИЧЕСКАЯ ОШИБКА: Не удалось добавить заказ пользователя {user_id} в очередь БД!"
+        logging.critical(critical_error_msg)
+        # Отправляем уведомление админам
+        for admin_id in ADMINS:
+            try:
+                await bot.send_message(
+                    admin_id, 
+                    f"🚨 {critical_error_msg}\nАртикул: {data.get('article', 'N/A')}, Магазин: {data.get('selected_shop', 'N/A')}"
+                )
+            except Exception as notify_err:
+                logging.error(f"Не удалось уведомить админа {admin_id}: {notify_err}")
+    else:
+        logging.info(f"Заказ пользователя {user_id} успешно поставлен в очередь.")
+    
     await state.clear()
 
 
@@ -3384,6 +3657,8 @@ async def startup():
         asyncio.create_task(scheduled_cache_update())
         asyncio.create_task(state_cleanup_task())
         asyncio.create_task(check_deadlines())
+        worker_task = asyncio.create_task(process_order_queue(bot))
+        logging.info("✅ Фоновый обработчик очереди заказов запущен.")
         logging.info("✅ Кэш загружен, задачи запущены")
     except Exception as e:
         logging.critical(f"🚨 Критическая ошибка запуска: {str(e)}")
@@ -3403,6 +3678,7 @@ async def main():
     try:
         await startup()
         initialize_approval_requests_table()
+        initialize_order_queue_table()
         logging.info("✅ Бот запущен в режиме поллинга")
         await dp.start_polling(bot, skip_updates=True)
     except KeyboardInterrupt:
