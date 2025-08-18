@@ -1028,7 +1028,9 @@ async def process_task_ids(message: types.Message, state: FSMContext):
     input_ids = [tid.strip() for tid in message.text.split(",") if tid.strip()]
     
     if not input_ids:
+        await state.clear()
         await message.answer("❌ Не указано ни одного ID задачи.")
+        await message.answer("↩️ Возврат в меню задач.", reply_markup=tasks_admin_keyboard())
         return
     
     # Преобразуем все ID к строковому типу для сравнения
@@ -1045,7 +1047,9 @@ async def process_task_ids(message: types.Message, state: FSMContext):
             invalid_ids.append(input_id)
     
     if not valid_tasks:
+        await state.clear() 
         await message.answer("❌ Не найдено ни одной действительной задачи.")
+        await message.answer("↩️ Возврат в меню задач.", reply_markup=tasks_admin_keyboard())
         return
     
     # Сообщаем о невалидных ID (если есть)
