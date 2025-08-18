@@ -263,8 +263,8 @@ logging.basicConfig(
 )
 
 # Сервисный режим
-SERVICE_MODE = True
-ADMINS = [122086799]
+SERVICE_MODE = False
+ADMINS = [122086799, 5183727015]
 worker_running = True
 
 # Кэширование
