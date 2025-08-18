@@ -18,7 +18,7 @@ import gspread.utils
 import uuid
 from contextlib import contextmanager
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.utils.markdown import markdown_decoration, escape_md
+from aiogram.utils.markdown import markdown_decoration
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
@@ -589,14 +589,14 @@ def get_tasks_sheet():
 
 def format_task_message(task_id: str, task: dict) -> str:
     """Форматирует сообщение задачи для отправки пользователю."""
-    from aiogram.utils.markdown import escape_md # Импорт внутри функции для примера, лучше вверху файла
+    # from aiogram.utils.markdown import markdown_decoration # Импорт внутри функции для примера, лучше вверху файла
 
-    # Экранируем потенциально опасные данные из task
-    escaped_task_id = escape_md(str(task_id))
-    escaped_text = escape_md(task.get('text', ''))
-    escaped_creator_initials = escape_md(task.get('creator_initials', ''))
-    escaped_deadline = escape_md(task.get('deadline', ''))
-    escaped_link = escape_md(task.get('link', ''))
+    # ИСПОЛЬЗУЕМ markdown_decoration.quote вместо escape_md
+    escaped_task_id = markdown_decoration.quote(str(task_id))
+    escaped_text = markdown_decoration.quote(task.get('text', ''))
+    escaped_creator_initials = markdown_decoration.quote(task.get('creator_initials', ''))
+    escaped_deadline = markdown_decoration.quote(task.get('deadline', ''))
+    escaped_link = markdown_decoration.quote(task.get('link', '')) # Экранируем URL
 
     lines = [f"📌 *Задача #{escaped_task_id}*"]
     
@@ -606,17 +606,13 @@ def format_task_message(task_id: str, task: dict) -> str:
         lines.append(f"👤 Создал: {escaped_creator_initials}")
 
     if task.get('deadline'):
-        # Можно добавить проверку и подсветку просроченных
         lines.append(f"⏰ *Дедлайн:* {escaped_deadline}")
     else:
         lines.append("⏳ *Дедлайн:* Не установлен")
         
     if task.get('link'):
         # Используем Markdown для ссылки
-        # URL также должен быть корректным и желательно экранирован
         lines.append(f"🔗 [Ссылка на документ]({escaped_link})")
-    # else: # Можно не добавлять, если ссылка не обязательна
-    #     lines.append("📎 Ссылка: Нет")
         
     return "\n".join(lines)
     
