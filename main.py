@@ -841,6 +841,41 @@ async def save_task_handler(message: types.Message, state: FSMContext):
     await state.clear()
 
 
+async def delete_task(task_id: str, admin_user_id: int) -> bool:
+    """
+    Удаляет задачу из Google Sheets по её ID.
+    
+    Args:
+        task_id (str): ID задачи для удаления.
+        admin_user_id (int): ID администратора, инициировавшего удаление (для логирования).
+
+    Returns:
+        bool: True, если задача успешно удалена, False в противном случае.
+    """
+    try:
+        sheet = get_tasks_sheet()
+        # Находим ячейку с task_id в первом столбце (ID задачи)
+        cell = sheet.find(task_id, in_column=1) # Ищем в столбце A (индекс 1)
+        
+        if not cell:
+            logging.warning(f"Попытка удаления несуществующей задачи {task_id} админом {admin_user_id}")
+            return False
+
+        # Удаляем всю строку
+        sheet.delete_rows(cell.row)
+        logging.info(f"Задача {task_id} успешно удалена админом {admin_user_id}")
+        return True
+
+    except gspread.exceptions.APIError as e:
+        # Ошибки Google Sheets API
+        logging.error(f"Ошибка Google Sheets API при удалении задачи {task_id} админом {admin_user_id}: {e}")
+        return False
+    except Exception as e:
+        # Другие ошибки
+        logging.error(f"Неожиданная ошибка при удалении задачи {task_id} админом {admin_user_id}: {e}", exc_info=True)
+        return False
+
+
 @dp.message(F.text == "🗑️ Удалить задачу")
 async def delete_task_start(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMINS:
