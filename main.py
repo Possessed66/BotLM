@@ -577,7 +577,7 @@ def normalize_task_row(task_id: str, row: dict) -> dict:
         "text": row.get("Текст", ""),
         "creator_initials": row.get("Инициалы", ""),
         "deadline": row.get("Дедлайн", ""),
-        "link": row.get("Ссылка", ""),
+        "link": str(row.get("Ссылка", "")).strip(),
         "statuses": row.get("Статусы", ""),
     }
 
@@ -1132,6 +1132,14 @@ async def process_position_filter(message: types.Message, state: FSMContext):
         await message.answer("❌ Ошибка обработки должности", reply_markup=tasks_admin_keyboard())
         await state.clear()
 
+
+@dp.message(TaskStates.input_manual_ids, F.text == "❌ Отмена")
+async def cancel_manual_user_input(message: types.Message, state: FSMContext):
+    """Обработчик отмены при ручном вводе ID пользователей."""
+    await state.clear()
+    # Отправляем сообщение об отмене и показываем клавиатуру меню задач
+    # Убедитесь, что функция tasks_admin_keyboard() определена и доступна
+    await message.answer("❌ Ввод ID пользователей отменён.", reply_markup=tasks_admin_keyboard())
 
 @dp.message(TaskStates.input_manual_ids)
 async def handle_manual_user_ids(message: types.Message, state: FSMContext):
