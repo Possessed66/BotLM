@@ -1029,8 +1029,8 @@ async def send_tasks_menu(message: types.Message, state: FSMContext):
     
     await state.update_data(tasks=tasks)
     keyboard = create_keyboard(
-        ["Отправить все", "Выбрать задачи", "Статистика выполнения", "🔙 Назад"],
-        (2, 2)
+        ["Отправить все", "Выбрать задачи", "🔙 Назад"],
+        (2, 1)
     )
     await message.answer("Выберите действие:", reply_markup=keyboard)
     await state.set_state(TaskStates.select_action)
@@ -1432,7 +1432,7 @@ async def check_deadlines():
         await asyncio.sleep(86400)
 
 
-@dp.message(TaskStates.review_selection, F.text == "📤 Подтвердить отправку") # <-- Новый фильтр
+@dp.message(TaskStates.review_selection, F.text == "📤 Подтвердить отправку") 
 async def confirm_task_dispatch(message: types.Message, state: FSMContext):
     """
     Подтверждение и выполнение рассылки задач.
@@ -1446,7 +1446,7 @@ async def confirm_task_dispatch(message: types.Message, state: FSMContext):
         await message.answer("❌ Нет получателей или задач для отправки.", reply_markup=tasks_admin_keyboard())
         await state.clear()
         return
-    wait_msg = await message.answer("🔄 Начинаю процесс отправки задач...") # <-- Добавлено: Сообщение о начале
+    wait_msg = await message.answer("🔄 Начинаю процесс отправки задач...") 
     try:
         task_ids_to_assign = list(selected_tasks.keys())
         # Преобразуем user_ids из строки (как они хранятся в state) в int
