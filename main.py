@@ -263,7 +263,7 @@ logging.basicConfig(
 )
 
 # Сервисный режим
-SERVICE_MODE = False
+SERVICE_MODE = True
 ADMINS = [122086799, 5183727015]
 worker_running = True
 
