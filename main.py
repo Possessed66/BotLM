@@ -692,10 +692,8 @@ async def load_tasks() -> Dict[str, Dict[str, Any]]:
     try:
         expected_headers = [
         "ID задачи", "Текст", "Ссылка", "Дедлайн",
-        "ID создателя", "Инициалы", "Cоздано",
-        "Назначена", "Статусы"
-        # Добавьте сюда любые дополнительные столбцы, если они есть и используются
-            ]
+        "ID создателя", "Инициалы", "Создано",
+        "Назначена", "Статусы"]
         records = sheet.get_all_records(expected_headers=expected_headers)
         logging.info(f"Загружено {len(records)} строк из Google Sheets для задач.")
         for row in records:
