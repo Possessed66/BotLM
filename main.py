@@ -1342,7 +1342,7 @@ async def handle_already_done(callback: types.CallbackQuery):
 
 
 # --- Исправленный фрагмент check_deadlines ---
-async def check_deadlines(bot):
+async def check_deadlines():
     """
     Проверка просроченных задач и уведомление пользователей,
     которым задача была назначена, но которые её НЕ ВЫПОЛНИЛИ.
