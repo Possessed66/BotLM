@@ -772,7 +772,7 @@ async def load_tasks() -> Dict[str, Dict[str, Any]]:
         
         
     
-return tasks # <-- Эта строка должна быть на уровне функции, вне блока try...except
+    return tasks # <-- Эта строка должна быть на уровне функции, вне блока try...except
 
 
 # --- Исправленный фрагмент assign_tasks_to_users ---
