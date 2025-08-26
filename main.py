@@ -690,7 +690,13 @@ async def load_tasks() -> Dict[str, Dict[str, Any]]:
     sheet = get_tasks_sheet()
     tasks = {}
     try:
-        records = sheet.get_all_records()
+        expected_headers = [
+        "ID задачи", "Текст", "Ссылка", "Дедлайн",
+        "ID создателя", "Инициалы", "Дата создания",
+        "Назначена", "Статусы"
+        # Добавьте сюда любые дополнительные столбцы, если они есть и используются
+            ]
+        records = sheet.get_all_records(expected_headers=expected_headers)
         logging.info(f"Загружено {len(records)} строк из Google Sheets для задач.")
         for row in records:
             task_id = str(row.get("ID задачи", "")).strip()
@@ -762,11 +768,11 @@ async def load_tasks() -> Dict[str, Dict[str, Any]]:
         
     except Exception as e: # <-- Этот except корректно завершает блок try
         logging.error(f"Ошибка загрузки задач из Google Sheets: {e}", exc_info=True)
-        # tasks = {} # <-- Не нужно, так как tasks уже инициализирован. Просто вернется то, что есть (возможно, пустой словарь).
-        # Возврат произойдет в конце функции
         
-    # Возврат результата происходит в любом случае
-    return tasks # <-- Эта строка должна быть на уровне функции, вне блока try...except
+        
+        
+    
+return tasks # <-- Эта строка должна быть на уровне функции, вне блока try...except
 
 
 # --- Исправленный фрагмент assign_tasks_to_users ---
