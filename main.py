@@ -631,7 +631,7 @@ def format_task_message(task_id: str, task: dict) -> str:
                 link = link_list[0]
                 # Экранируем скобки в URL для корректной работы Markdown-ссылки
                 escaped_url = link.replace('(', '\\(').replace(')', '\\)')
-                lines.append(f"🔗 [Ссылка на документ]({escaped_url})")
+                lines.append(f"🔗 [Ссылка на задачу]({escaped_url})")
             else:
                 # Несколько ссылок - с нумерацией
                 lines.append("🔗 *Ссылки на документы:*")
@@ -1342,7 +1342,7 @@ async def handle_already_done(callback: types.CallbackQuery):
 
 
 # --- Исправленный фрагмент check_deadlines ---
-async def check_deadlines():
+async def check_deadlines(bot):
     """
     Проверка просроченных задач и уведомление пользователей,
     которым задача была назначена, но которые её НЕ ВЫПОЛНИЛИ.
@@ -1356,59 +1356,88 @@ async def check_deadlines():
                 logging.info("📭 Нет задач для проверки.")
                 await asyncio.sleep(86400) # Ждем 24 часа
                 continue
+
             today_date = datetime.now().date()
             notified_count = 0
+
             for task_id, task in tasks.items():
                 deadline_str = task.get("deadline")
                 if not deadline_str:
                     continue # Пропускаем задачи без дедлайна
+
                 try:
                     # Преобразуем строку дедлайна в объект date
                     deadline_date = datetime.strptime(deadline_str, "%d.%m.%Y").date()
                 except ValueError as e:
                     logging.warning(f"Неверный формат даты для задачи {task_id} ('{deadline_str}'): {e}")
                     continue
+
                 # Проверяем, просрочена ли задача
                 if deadline_date < today_date:
                     logging.info(f"⏰ Найдена просроченная задача {task_id}: {task['text']}")
-                    # --- Исправлено: Используем ключи из исправленной load_tasks ---
+
+                    # - Исправлено: Используем ключи из исправленной load_tasks -
                     # Получаем множества ID
                     assigned_users = set(task.get("assigned_to", []))
                     completed_users = set(task.get("completed_by", [])) # <-- Исправленный ключ
+
                     # Находим пользователей для уведомления: назначены, но не выполнили
                     users_to_notify = assigned_users - completed_users
+
                     if not users_to_notify:
                         logging.info(f"📭 По задаче {task_id} нет пользователей для уведомления "
-                                   f"(все выполнили ({len(completed_users)}) или никто не назначен ({len(assigned_users)})).")
+                                    f"(все выполнили ({len(completed_users)}) или никто не назначен ({len(assigned_users)})).")
                         continue
-                    # Формируем сообщение
-                    # Формируем сообщение
-                    notification_text = f"🚨 *Просроченная задача!*\n📌 Задача #{task_id}: {task['text']}\n📅 Дедлайн был: {deadline_str}"
+
+                    # --- ИЗМЕНЕНО: Формируем сообщение с помощью format_task_message ---
+                    # Это включит текст, создателя, дедлайн и ссылки в том же формате, что и обычные задачи
+                    try:
+                        # Вызываем вашу существующую функцию форматирования
+                        notification_text_markdown = format_task_message(task_id, task)
+                        # Добавляем префикс/постфикс, если нужно
+                        full_notification_text = f"🚨 *Просроченная задача!*\n\n{notification_text_markdown}"
+                    except Exception as format_e:
+                        # На случай, если format_task_message как-то сломается, fallback
+                        logging.error(f"Ошибка форматирования уведомления для задачи {task_id} с format_task_message: {format_e}")
+                        full_notification_text = (
+                            f"🚨 *Просроченная задача!*\n"
+                            f"📌 *Задача #{task_id}:* {task.get('text', 'Текст не указан')}\n"
+                            f"📅 *Дедлайн был:* {deadline_str}\n"
+                            )
+                    # -------------------------------------------------------------------
 
                     # Отправляем уведомления
                     for user_id_str in users_to_notify:
                         try:
                             user_id_int = int(user_id_str)
+                            
+                        
+                            
+                            task_kb = get_task_keyboard(task_id) 
+                            
                             await bot.send_message(
                                 user_id_int,
-                                notification_text,
-                                parse_mode=ParseMode.MARKDOWN
+                                full_notification_text, # Используем сформированный текст
+                                parse_mode=ParseMode.MARKDOWN, # Используем Markdown
+                                reply_markup=task_kb # Прикрепляем кнопку "Выполнено"
                             )
+            
+                            
                             logging.info(f"✉️ Уведомление о просроченной задаче {task_id} отправлено пользователю {user_id_int}")
                             notified_count += 1
-                            # Небольшая пауза между сообщениями
-                            await asyncio.sleep(0.1)
+                            # Небольшая пауза между сообщениями для соблюдения лимитов API
+                            await asyncio.sleep(0.1) 
                         except ValueError:
                             logging.error(f"Неверный формат ID пользователя '{user_id_str}' для задачи {task_id}")
-                        except Exception as e: # TelegramForbiddenError, TelegramRetryAfter и др.
-                            logging.error(f"❌ Ошибка отправки уведомления пользователю {user_id_str} по задаче {task_id}: {e}")
-                    logging.info(f"✅ По задаче {task_id} уведомлено {len(users_to_notify)} пользователей.")
-            logging.info(f"🏁 Проверка просроченных задач завершена. Отправлено уведомлений: {notified_count}")
+                        except Exception as send_e: # Ловим другие ошибки отправки (заблокировал бота и т.д.)
+                             logging.error(f"Ошибка отправки уведомления о просроченной задаче {task_id} пользователю {user_id_str}: {send_e}")
+
+            logging.info(f"🔚 Проверка просроченных задач завершена. Отправлено {notified_count} уведомлений.")
         except Exception as e:
-            logging.error(f"🚨 Критическая ошибка в check_deadlines: {e}", exc_info=True)
-        # Ждем 24 часа до следующей проверки (86400 секунд)
-        logging.info("⏳ check_deadlines уходит в сон на 24 часа.")
-        await asyncio.sleep(86400)
+            logging.error(f"Критическая ошибка в check_deadlines: {e}", exc_info=True)
+        
+        # Ждем 24 часа до следующей проверки
+        await asyncio.sleep(86400) 
 
 
 @dp.message(TaskStates.review_selection, F.text == "📤 Подтвердить отправку") 
