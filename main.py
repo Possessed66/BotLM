@@ -3751,8 +3751,32 @@ async def disable_service_mode(message: types.Message):
                         reply_markup=admin_panel_keyboard())
 
 
-
-
+# ===================== Графики =====================
+@bot.message_handler(commands=['plot'])
+def handle_plot_command(message):
+    try:
+        args = message.text.split()[1:]
+        if len(args) != 3:
+            bot.reply_to(message, "Используй: /plot <номер_отдела> <дата_начала> <дата_конца>")
+            return
+        
+        dept_num = args[0]
+        start_date = args[1]
+        end_date = args[2]
+        dept_name = f"{dept_num} отдел"
+        
+        # Генерируем графики
+        plot_files = generate_plots_for_department(dept_name, start_date, end_date)
+        
+        # Отправляем файлы пользователю
+        for file_path in plot_files:
+            with open(file_path, 'rb') as photo:
+                bot.send_photo(message.chat.id, photo)
+        
+        bot.reply_to(message, f"Графики отправлены ({len(plot_files)} шт.)")
+        
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка: {str(e)}")
 
 
 # ===================== ЗАПУСК ПРИЛОЖЕНИЯ =====================
