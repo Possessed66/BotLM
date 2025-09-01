@@ -27,7 +27,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.enums import ParseMode
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
-from aiogram.types import ReplyKeyboardRemove, File, BufferedInputFile, InlineKeyboardMarkup, Message
+from aiogram.types import ReplyKeyboardRemove, File, BufferedInputFile, InlineKeyboardMarkup, Message, FSInputFile
 from aiogram.exceptions import TelegramForbiddenError
 from aiogram.filters import Command
 from contextlib import suppress
@@ -3785,8 +3785,8 @@ async def plot_command(message: Message):
         
         if plot_files:
             for file_path in plot_files[:10]:
-                with open(file_path, 'rb') as photo:
-                    await message.answer_photo(photo=photo)
+                photo = FSInputFile(file_path)
+                await message.answer_photo(photo=photo)
             await message.answer(f"Графики отправлены ({len(plot_files)} шт.)")
         else:
             await message.answer("Не удалось создать графики")
