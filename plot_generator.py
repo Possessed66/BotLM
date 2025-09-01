@@ -141,10 +141,16 @@ def parse_department_sheet(df, selected_dates=None):
                 if col_idx is not None and col_idx < len(row):
                     # Значение показателя
                     value = None
-                    if col_idx < len(row) and pd.notna(row[col_idx]):
+                    if col_idx < len(row) and pd.notna(row[col_idx])::
                         try:
-                            value_str = str(row[col_idx]).replace(',', '.')
-                            if value_str.strip():
+                            value_str = str(row[col_idx])
+                            logger.debug(f"Исходное значение: {repr(value_str)}")
+                            
+                            value_str = value_str.strip().replace('\xa0', '').replace(' ', '')
+                            value_str = value_str.replace(',', '.')
+                            
+                            logger.debug(f"Очищенное значение: {repr(value_str)}")
+                            if value_str and value_str != '':
                                 value = float(value_str)
                         except ValueError:
                             pass
