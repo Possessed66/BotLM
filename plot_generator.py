@@ -119,7 +119,7 @@ def parse_department_sheet(df, selected_dates=None):
             row_idx += 1
             continue
         
-        # Проверяем, есть ли данные в строке
+        # Проверяем, есть ли данные в строке (магазин в столбце C)
         if len(row) <= 2 or pd.isna(row[2]):
             row_idx += 1
             continue
@@ -130,6 +130,9 @@ def parse_department_sheet(df, selected_dates=None):
             row_idx += 1
             continue
         
+        # === ДОБАВИТЬ ЭТУ СТРОКУ ДЛЯ ОТЛАДКИ ===
+        logger.debug(f"Обрабатываем магазин {shop} для показателя '{current_indicator}'")
+        
         values = []
         ratings = []
         
@@ -139,18 +142,15 @@ def parse_department_sheet(df, selected_dates=None):
                 col_idx = find_date_column(df, date_str)
                 
                 if col_idx is not None and col_idx < len(row):
+                    # === ДОБАВИТЬ ЭТУ СТРОКУ ДЛЯ ОТЛАДКИ ===
+                    logger.debug(f"Дата {date_str}: col_idx={col_idx}, значение={row[col_idx] if col_idx < len(row) else 'N/A'}")
+                    
                     # Значение показателя
                     value = None
                     if col_idx < len(row) and pd.notna(row[col_idx]):
                         try:
-                            value_str = str(row[col_idx])
-                            logger.debug(f"Исходное значение: {repr(value_str)}")
-                            
-                            value_str = value_str.strip().replace('\xa0', '').replace(' ', '')
-                            value_str = value_str.replace(',', '.')
-                            
-                            logger.debug(f"Очищенное значение: {repr(value_str)}")
-                            if value_str and value_str != '':
+                            value_str = str(row[col_idx]).replace(',', '.')
+                            if value_str.strip():
                                 value = float(value_str)
                         except ValueError:
                             pass
@@ -203,7 +203,6 @@ def parse_department_sheet(df, selected_dates=None):
         data[current_indicator][shop] = {'values': values, 'ratings': ratings}
         row_idx += 1
     
-    logger.info(f"Результат парсинга: {list(data.keys())}")
     return data
 
 def plot_indicator_trend(indicator_data, indicator_name, output_path, dates=None):
