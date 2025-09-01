@@ -21,7 +21,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.utils.markdown import markdown_decoration
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Bot, Dispatcher, types, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
