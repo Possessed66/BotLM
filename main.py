@@ -306,9 +306,10 @@ bot = Bot(
     token=BOT_TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
+
 dp = Dispatcher()
 dp.errors.register(global_error_handler)
-dp.include_router(router)
+
 
 # Инициализация таблиц
 try:
@@ -3753,12 +3754,17 @@ async def disable_service_mode(message: types.Message):
 
 
 # ===================== Графики =====================
-@bot.message_handler(commands=['plot'])
-def handle_plot_command(message):
+plot_router = Router()
+
+@plot_router.message(Command("plot"))
+async def plot_command(message: Message):
     try:
-        args = message.text.split()[1:]
+        args = message.text.split()[1:] if len(message.text.split()) > 1 else []
         if len(args) != 3:
-            bot.reply_to(message, "Используй: /plot <номер_отдела> <дата_начала> <дата_конца>")
+            await message.answer(
+                "Используй: /plot <номер_отдела> <дата_начала> <дата_конца>\n"
+                "Пример: /plot 15 06.01 17.02"
+            )
             return
         
         dept_num = args[0]
@@ -3766,19 +3772,30 @@ def handle_plot_command(message):
         end_date = args[2]
         dept_name = f"{dept_num} отдел"
         
-        # Генерируем графики
-        plot_files = generate_plots_for_department(dept_name, start_date, end_date)
+        await message.answer("Генерирую графики, подождите...")
         
-        # Отправляем файлы пользователю
-        for file_path in plot_files:
-            with open(file_path, 'rb') as photo:
-                bot.send_photo(message.chat.id, photo)
+        # Запуск в отдельном потоке (обязательно для aiogram!)
+        loop = asyncio.get_event_loop()
+        plot_files = await loop.run_in_executor(
+            None, 
+            generate_plots_for_department, 
+            dept_name, 
+            start_date, 
+            end_date
+        )
         
-        bot.reply_to(message, f"Графики отправлены ({len(plot_files)} шт.)")
-        
+        if plot_files:
+            for file_path in plot_files[:10]:  # Ограничение 10 файлами
+                with open(file_path, 'rb') as photo:
+                    await message.answer_photo(photo=photo)
+            await message.answer(f"Графики отправлены ({len(plot_files)} шт.)")
+        else:
+            await message.answer("Не удалось создать графики")
+            
     except Exception as e:
-        bot.reply_to(message, f"Ошибка: {str(e)}")
+        await message.answer(f"Ошибка: {str(e)}")
 
+dp.include_router(plot_router)
 
 # ===================== ЗАПУСК ПРИЛОЖЕНИЯ =====================
 async def scheduled_cache_update():
