@@ -1,4 +1,5 @@
 # plot_generator.py
+import logging
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
@@ -7,6 +8,9 @@ from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from Config_plot import SERVICE_ACCOUNT_INFO, SPREADSHEET_ID
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def get_sheets_service():
     """Получить сервис Google Sheets"""
@@ -105,6 +109,7 @@ def parse_department_sheet(df, selected_dates=None):
         if pd.notna(row[0]) and str(row[0]).strip() and str(row[0]).strip() != '':
             if row_idx > 0:  # Не для первой строки
                 current_indicator = str(row[0]).strip()
+                logger.info(f"Обнаружен показатель: {current_indicator}")
                 data[current_indicator] = {}
                 row_idx += 1
                 continue
@@ -150,7 +155,7 @@ def parse_department_sheet(df, selected_dates=None):
                         try:
                             rating_str = str(row[col_idx + 1])
                             if rating_str.strip():
-                                rating = int(float(rating_str))  # float для обработки "7.0"
+                                rating = int(float(rating_str))
                         except ValueError:
                             pass
                     
@@ -192,6 +197,7 @@ def parse_department_sheet(df, selected_dates=None):
         data[current_indicator][shop] = {'values': values, 'ratings': ratings}
         row_idx += 1
     
+    logger.info(f"Результат парсинга: {list(data.keys())}")
     return data
 
 def plot_indicator_trend(indicator_data, indicator_name, output_path, dates=None):
@@ -264,6 +270,9 @@ def generate_plots_for_department(dept_name, start_date_str, end_date_str):
             raise Exception("Не найдено данных за указанный период")
         
         parsed_data = parse_department_sheet(df_dept, selected_dates)
+        
+        # Проверка: сколько показателей было найдено?
+        logger.info(f"Найдено показателей: {len(parsed_data)}")
         
         # Создаем временные файлы
         temp_files = []
