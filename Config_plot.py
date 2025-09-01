@@ -2,10 +2,10 @@ import os
 from dotenv import load_dotenv
 
 # Загружаем переменные из .env (только для сервисного аккаунта)
-load_dotenv('secrets.env')
+load_dotenv('secret.env')
 
 # Конфигурация Google API - из secrets.env
-SERVICE_ACCOUNT_FILE = os.getenv('GOOGLE_SERVICE_ACCOUNT_FILE')
+SERVICE_ACCOUNT_FILE = os.getenv('GOOGLE_CREDENTIALS')
 
 # SPREADSHEET_ID задаем вручную
 SPREADSHEET_ID = '1wgSC64AtdF3n2qk58n0hxO3nEgaLQ6e1qJdVKcKqStI'  # <-- Замените на ваш ID
