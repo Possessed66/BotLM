@@ -308,6 +308,7 @@ bot = Bot(
 )
 dp = Dispatcher()
 dp.errors.register(global_error_handler)
+dp.include_router(router)
 
 # Инициализация таблиц
 try:
