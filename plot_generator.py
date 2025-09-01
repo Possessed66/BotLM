@@ -303,8 +303,8 @@ def generate_plots_for_department(dept_name, start_date_str, end_date_str):
             else:
                 logger.info(f"Показатель '{indicator}' не имеет данных для построения графика")
                 # Дополнительная проверка: выводим данные для диагностики
-                logger.debug(f"Данные для '{indicator}': {shops_data}")
-        
+                logger.info(f"Данные для '{indicator}': {shops_data}")
+                
         return temp_files
         
     except Exception as e:
