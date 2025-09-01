@@ -35,6 +35,8 @@ from google.oauth2.service_account import Credentials
 import gspread
 from gspread.exceptions import APIError, SpreadsheetNotFound
 from cachetools import LRUCache
+from plot_generator import generate_plots_for_department
+
 
 
 
