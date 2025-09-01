@@ -3762,7 +3762,7 @@ async def plot_command(message: Message):
         args = message.text.split()[1:] if len(message.text.split()) > 1 else []
         if len(args) != 3:
             await message.answer(
-                "Используй: /plot <номер_отдела> <дата_начала> <дата_конца>\n"
+                "Используй: /plot [номер_отдела] [дата_начала] [дата_конца]\n"
                 "Пример: /plot 15 06.01 17.02"
             )
             return
@@ -3774,7 +3774,6 @@ async def plot_command(message: Message):
         
         await message.answer("Генерирую графики, подождите...")
         
-        # Запуск в отдельном потоке (обязательно для aiogram!)
         loop = asyncio.get_event_loop()
         plot_files = await loop.run_in_executor(
             None, 
@@ -3785,7 +3784,7 @@ async def plot_command(message: Message):
         )
         
         if plot_files:
-            for file_path in plot_files[:10]:  # Ограничение 10 файлами
+            for file_path in plot_files[:10]:
                 with open(file_path, 'rb') as photo:
                     await message.answer_photo(photo=photo)
             await message.answer(f"Графики отправлены ({len(plot_files)} шт.)")
@@ -3793,7 +3792,11 @@ async def plot_command(message: Message):
             await message.answer("Не удалось создать графики")
             
     except Exception as e:
-        await message.answer(f"Ошибка: {str(e)}")
+        # Экранируем специальные символы в сообщении об ошибке
+        error_msg = f"Ошибка: {str(e)}"
+        # Убираем угловые скобки и другие спецсимволы
+        error_msg = error_msg.replace('<', '<').replace('>', '>')
+        await message.answer(error_msg, parse_mode=None)
 
 dp.include_router(plot_router)
 
