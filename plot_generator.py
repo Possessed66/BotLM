@@ -131,7 +131,7 @@ def parse_department_sheet(df, selected_dates=None):
             continue
         
         # === ДОБАВИТЬ ЭТУ СТРОКУ ДЛЯ ОТЛАДКИ ===
-        logger.debug(f"Обрабатываем магазин {shop} для показателя '{current_indicator}'")
+        logger.info(f"Обрабатываем магазин {shop} для показателя '{current_indicator}'")
         
         values = []
         ratings = []
@@ -143,7 +143,7 @@ def parse_department_sheet(df, selected_dates=None):
                 
                 if col_idx is not None and col_idx < len(row):
                     # === ДОБАВИТЬ ЭТУ СТРОКУ ДЛЯ ОТЛАДКИ ===
-                    logger.debug(f"Дата {date_str}: col_idx={col_idx}, значение={row[col_idx] if col_idx < len(row) else 'N/A'}")
+                    logger.info(f"Дата {date_str}: col_idx={col_idx}, значение={row[col_idx] if col_idx < len(row) else 'N/A'}")
                     
                     # Значение показателя
                     value = None
