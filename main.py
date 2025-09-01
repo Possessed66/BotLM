@@ -3770,7 +3770,7 @@ async def plot_command(message: Message):
         dept_num = args[0]
         start_date = args[1]
         end_date = args[2]
-        dept_name = f"{dept_num} отдел"
+        dept_name = dept_num
         
         await message.answer("Генерирую графики, подождите...")
         
