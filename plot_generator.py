@@ -6,11 +6,11 @@ import tempfile
 from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from Config_plot import SERVICE_ACCOUNT_FILE, SPREADSHEET_ID
+from Config_plot import SERVICE_ACCOUNT_INFO, SPREADSHEET_ID
 
 def get_sheets_service():
     """Получить сервис Google Sheets"""
-    from config import SERVICE_ACCOUNT_INFO  # Импортируем словарь
+    
     
     creds = service_account.Credentials.from_service_account_info(
         SERVICE_ACCOUNT_INFO,  # <-- Используем from_service_account_info
