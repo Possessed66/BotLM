@@ -10,9 +10,11 @@ from Config_plot import SERVICE_ACCOUNT_FILE, SPREADSHEET_ID
 
 def get_sheets_service():
     """Получить сервис Google Sheets"""
-    creds = service_account.Credentials.from_service_account_file(
-        SERVICE_ACCOUNT_FILE, 
-        scopes=['https://www.googleapis.com/auth/spreadsheets']  # ИСПРАВЛЕНО: убраны пробелы
+    from config import SERVICE_ACCOUNT_INFO  # Импортируем словарь
+    
+    creds = service_account.Credentials.from_service_account_info(
+        SERVICE_ACCOUNT_INFO,  # <-- Используем from_service_account_info
+        scopes=['https://www.googleapis.com/auth/spreadsheets']
     )
     return build('sheets', 'v4', credentials=creds)
 
