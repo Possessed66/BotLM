@@ -141,7 +141,7 @@ def parse_department_sheet(df, selected_dates=None):
                 if col_idx is not None and col_idx < len(row):
                     # Значение показателя
                     value = None
-                    if col_idx < len(row) and pd.notna(row[col_idx])::
+                    if col_idx < len(row) and pd.notna(row[col_idx]):
                         try:
                             value_str = str(row[col_idx])
                             logger.debug(f"Исходное значение: {repr(value_str)}")
