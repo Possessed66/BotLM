@@ -277,7 +277,6 @@ def generate_plots_for_department(dept_name, start_date_str, end_date_str):
         
         parsed_data = parse_department_sheet(df_dept, selected_dates)
         
-        # Проверка: сколько показателей было найдено?
         logger.info(f"Найдено показателей: {len(parsed_data)}")
         
         # Создаем временные файлы
@@ -292,14 +291,24 @@ def generate_plots_for_department(dept_name, start_date_str, end_date_str):
                 for shop_data in shops_data.values()
             )
             
+            logger.info(f"Показатель '{indicator}': has_data = {has_data}")
+            
             if has_data:
                 safe_indicator_name = "".join(c for c in indicator if c.isalnum() or c in (' ', '-', '_')).rstrip()
                 output_path = os.path.join(temp_dir, f"{dept_name}_{safe_indicator_name}.png")
                 date_labels = [f"{d[0].strftime('%d.%m')}-{d[1].strftime('%d.%m')}" for d in selected_dates]
                 plot_indicator_trend(shops_data, indicator, output_path, date_labels)
                 temp_files.append(output_path)
+                logger.info(f"График создан для '{indicator}'")
+            else:
+                logger.info(f"Показатель '{indicator}' не имеет данных для построения графика")
+                # Дополнительная проверка: выводим данные для диагностики
+                logger.debug(f"Данные для '{indicator}': {shops_data}")
         
         return temp_files
+        
+    except Exception as e:
+        raise Exception(f"Ошибка при генерации графиков: {str(e)}")
         
     except Exception as e:
         raise Exception(f"Ошибка при генерации графиков: {str(e)}")
