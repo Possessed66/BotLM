@@ -27,7 +27,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.enums import ParseMode
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
-from aiogram.types import ReplyKeyboardRemove, File, BufferedInputFile, InlineKeyboardMarkup, Message, FSInputFile
+from aiogram.types import ReplyKeyboardRemove, File, BufferedInputFile, InlineKeyboardMarkup
 from aiogram.exceptions import TelegramForbiddenError
 from aiogram.filters import Command
 from contextlib import suppress
@@ -35,7 +35,7 @@ from google.oauth2.service_account import Credentials
 import gspread
 from gspread.exceptions import APIError, SpreadsheetNotFound
 from cachetools import LRUCache
-from plot_generator import generate_plots_for_department
+
 
 
 
@@ -3752,53 +3752,6 @@ async def disable_service_mode(message: types.Message):
     await message.answer("✅ Сервисный режим выключен", 
                         reply_markup=admin_panel_keyboard())
 
-
-# ===================== Графики =====================
-plot_router = Router()
-
-@plot_router.message(Command("plot"))
-async def plot_command(message: Message):
-    try:
-        args = message.text.split()[1:] if len(message.text.split()) > 1 else []
-        if len(args) != 3:
-            await message.answer(
-                "Используй: /plot [номер_отдела] [дата_начала] [дата_конца]\n"
-                "Пример: /plot 15 06.01 17.02"
-            )
-            return
-        
-        dept_num = args[0]
-        start_date = args[1]
-        end_date = args[2]
-        dept_name = dept_num
-        
-        await message.answer("Генерирую графики, подождите...")
-        
-        loop = asyncio.get_event_loop()
-        plot_files = await loop.run_in_executor(
-            None, 
-            generate_plots_for_department, 
-            dept_name, 
-            start_date, 
-            end_date
-        )
-        
-        if plot_files:
-            for file_path in plot_files[:10]:
-                photo = FSInputFile(file_path)
-                await message.answer_photo(photo=photo)
-            await message.answer(f"Графики отправлены ({len(plot_files)} шт.)")
-        else:
-            await message.answer("Не удалось создать графики")
-            
-    except Exception as e:
-        # Экранируем специальные символы в сообщении об ошибке
-        error_msg = f"Ошибка: {str(e)}"
-        # Убираем угловые скобки и другие спецсимволы
-        error_msg = error_msg.replace('<', '<').replace('>', '>')
-        await message.answer(error_msg, parse_mode=None)
-
-dp.include_router(plot_router)
 
 # ===================== ЗАПУСК ПРИЛОЖЕНИЯ =====================
 async def scheduled_cache_update():
