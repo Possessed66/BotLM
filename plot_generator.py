@@ -12,7 +12,7 @@ def get_sheets_service():
     """Получить сервис Google Sheets"""
     creds = service_account.Credentials.from_service_account_file(
         SERVICE_ACCOUNT_FILE, 
-        scopes=['https://www.googleapis.com/auth/spreadsheets']
+        scopes=['https://www.googleapis.com/auth/spreadsheets']  # ИСПРАВЛЕНО: убраны пробелы
     )
     return build('sheets', 'v4', credentials=creds)
 
@@ -69,7 +69,7 @@ def select_period(dates, start_str, end_str):
 
 def find_date_column(df, date_str):
     """Найти индекс столбца по дате"""
-    if len(df) == 0:
+    if len(df) == 0 or len(df.iloc[0]) == 0:
         return None
     for col_idx, col_name in enumerate(df.iloc[0]):
         if str(col_name).strip() == date_str:
