@@ -21,13 +21,23 @@ def get_sheets_service():
 def read_sheet(sheets_service, spreadsheet_id, sheet_name):
     """Прочитать лист Google Sheets"""
     try:
+        # Сначала получаем список всех листов
+        sheet_metadata = sheets_service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+        sheets = sheet_metadata.get('sheets', [])
+        sheet_names = [sheet['properties']['title'] for sheet in sheets]
+        
+        # Проверяем, существует ли лист
+        if sheet_name not in sheet_names:
+            available_sheets = ', '.join(sheet_names[:10])  # Показываем первые 10
+            raise ValueError(f"Лист '{sheet_name}' не найден. Доступные листы: {available_sheets}")
+        
         result = sheets_service.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
             range=f'{sheet_name}!A1:ZZ'
         ).execute()
         values = result.get('values', [])
         if not values:
-            raise ValueError(f"No data found in sheet: {sheet_name}")
+            raise ValueError(f"Лист '{sheet_name}' пуст")
         return pd.DataFrame(values)
     except Exception as e:
         raise Exception(f"Ошибка чтения листа '{sheet_name}': {str(e)}")
