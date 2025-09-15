@@ -1283,66 +1283,62 @@ async def cancel_sending(message: types.Message, state: FSMContext):
     await message.answer("❌ Рассылка отменена", reply_markup=tasks_admin_keyboard())
 
 
+async def run_in_thread(func, *args, **kwargs):
+    return await asyncio.to_thread(func, *args, **kwargs)
+
+
 @dp.callback_query(F.data.startswith("task_done:"))
 async def mark_task_done(callback: types.CallbackQuery):
+    # ⚡ быстрый ответ, чтобы query не протух
+    await callback.answer("⏳ Обрабатываю...", show_alert=False)
+
     task_id = callback.data.split(":")[1]
     user_id = callback.from_user.id
     sheet = get_tasks_sheet()
+
     try:
-        cell = sheet.find(task_id)
+        # ⚡ поиск в отдельном потоке
+        cell = await run_in_thread(sheet.find, task_id)
         if not cell:
-            await callback.answer("❌ Задача не найдена")
+            await callback.message.answer("❌ Задача не найдена")
             return
-        # --- Исправлено: Работаем с ключом "completed_by" ---
-        # Получаем текущие статусы
-        statuses_raw = sheet.cell(cell.row, 9).value # Столбец I (9) - "Статусы"
+
+        # ⚡ чтение ячейки в отдельном потоке
+        statuses_raw = await run_in_thread(sheet.cell, cell.row, 9)
+        statuses_raw = statuses_raw.value if statuses_raw else ""
+
         try:
-            # Пытаемся распарсить JSON. Если не удается, создаем пустой.
             statuses_data = json.loads(statuses_raw) if statuses_raw.strip() else {}
         except (json.JSONDecodeError, TypeError):
             logging.warning(f"Неверный формат JSON для задачи {task_id} в строке {cell.row}. Создаю новый.")
             statuses_data = {}
 
-        # Инициализируем список выполненных, если его нет
         if "completed_by" not in statuses_data:
             statuses_data["completed_by"] = []
 
-        # Проверяем, выполнен ли уже
         if str(user_id) in statuses_data["completed_by"]:
-             await callback.answer("✅ Уже отмечено")
-             return
+            await callback.message.answer("✅ Уже отмечено")
+            return
 
-        # Добавляем пользователя в список выполнивших
         statuses_data["completed_by"].append(str(user_id))
 
-        # Сохраняем обновленный JSON
-        sheet.update_cell(cell.row, 9, json.dumps(statuses_data, ensure_ascii=False))
-        await callback.answer("✅ Отмечено как выполнено")
+        # ⚡ запись в отдельном потоке
+        await run_in_thread(sheet.update_cell, cell.row, 9, json.dumps(statuses_data, ensure_ascii=False))
+
+        await callback.message.answer("✅ Отмечено как выполнено")
+
         try:
-            # Получаем обновленные данные задачи для форматирования
-            # Это упрощенный способ, в идеале перезагружать задачу
-            # или передавать текст изначально. Для демонстрации сойдет.
-            # Альтернатива: хранить task_text в callback_data или в состоянии.
-            
-            # Простое обновление текста и кнопки
-            original_text = callback.message.text
-            # Добавляем отметку о выполнении в текст (если нужно)
-            # updated_text = f"{original_text}\n\n✅ *Выполнено вами*"
-            
             new_markup = types.InlineKeyboardMarkup(inline_keyboard=[
                 [types.InlineKeyboardButton(text="✔️ Выполнено", callback_data="task_already_done")]
             ])
-            # await callback.message.edit_text(text=updated_text, parse_mode=ParseMode.MARKDOWN, reply_markup=new_markup)
-            # Или просто обновляем кнопку
             await callback.message.edit_reply_markup(reply_markup=new_markup)
         except Exception as e:
-            # Ошибка редактирования сообщения не критична
-            logging.warning(f"Не удалось обновить сообщение задачи {task_id} для пользователя {user_id}: {e}")
-            
+            logging.warning(f"Не удалось обновить сообщение задачи {task_id}: {e}")
+
     except Exception as e:
         logging.error(f"Ошибка отметки задачи {task_id} пользователем {user_id}: {str(e)}", exc_info=True)
-        await callback.answer("❌ Ошибка выполнения. Попробуйте позже.", show_alert=True)
-
+        await callback.message.answer("❌ Ошибка выполнения. Попробуйте позже.")
+        
 
 @dp.callback_query(F.data == "task_already_done")
 async def handle_already_done(callback: types.CallbackQuery):
