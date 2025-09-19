@@ -836,26 +836,60 @@ async def add_task_text(message: types.Message, state: FSMContext):
     await message.answer("📝 Введите текст задачи:", reply_markup=cancel_keyboard())
     await state.set_state(TaskStates.add_text)
 
+@dp.message(TaskStates.add_text, F.text == "❌ Отмена")
+@dp.message(TaskStates.add_text, F.text == "/start")
+async def cancel_add_task_text(message: types.Message, state: FSMContext):
+    await state.clear()
+    # Определяем, какую клавиатуру отправить в зависимости от команды или кнопки
+    if message.text == "/start":
+        # Возврат в главное меню пользователя
+        await message.answer("Действие отменено.", reply_markup=main_menu_keyboard(message.from_user.id))
+    else:
+        # Возврат в меню управления задачами
+        await message.answer("Добавление задачи отменено.", reply_markup=tasks_admin_keyboard())
+
 @dp.message(TaskStates.add_text)
 async def add_task_link(message: types.Message, state: FSMContext):
     await state.update_data(text=message.text)
-    await message.answer("🔗 Пришлите ссылку на Google Sheets (или /skip):")
+    await message.answer("🔗 Пришлите ссылку на Google Sheets (или /skip):", reply_markup=cancel_keyboard())
     await state.set_state(TaskStates.add_link)
+
+# --- Добавлены хендлеры отмены для TaskStates.add_link ---
+@dp.message(TaskStates.add_link, F.text == "❌ Отмена")
+@dp.message(TaskStates.add_link, F.text == "/start")
+async def cancel_add_task_link(message: types.Message, state: FSMContext):
+    await state.clear()
+    if message.text == "/start":
+        await message.answer("Действие отменено.", reply_markup=main_menu_keyboard(message.from_user.id))
+    else:
+        await message.answer("Добавление задачи отменено.", reply_markup=tasks_admin_keyboard())
 
 @dp.message(TaskStates.add_link)
 async def add_task_deadline(message: types.Message, state: FSMContext):
     link = message.text if message.text != "/skip" else None
     await state.update_data(link=link)
-    await message.answer("📅 Укажите дедлайн (ДД.ММ.ГГГГ или /skip):")
+    await message.answer("📅 Укажите дедлайн (ДД.ММ.ГГГГ или /skip):", reply_markup=cancel_keyboard())
     await state.set_state(TaskStates.add_deadline)
+
+# --- Добавлены хендлеры отмены для TaskStates.add_deadline ---
+@dp.message(TaskStates.add_deadline, F.text == "❌ Отмена")
+@dp.message(TaskStates.add_deadline, F.text == "/start")
+async def cancel_add_task_deadline(message: types.Message, state: FSMContext):
+    await state.clear()
+    if message.text == "/start":
+        await message.answer("Действие отменено.", reply_markup=main_menu_keyboard(message.from_user.id))
+    else:
+        await message.answer("Добавление задачи отменено.", reply_markup=tasks_admin_keyboard())
 
 @dp.message(TaskStates.add_deadline)
 async def save_task_handler(message: types.Message, state: FSMContext):
     data = await state.get_data()
     deadline = message.text if message.text != "/skip" else None
     
+    # Проверка формата даты
     if deadline and not re.match(r"^\d{2}\.\d{2}\.\d{4}$", deadline):
-        await message.answer("❌ Неверный формат даты. Используйте ДД.ММ.ГГГГ:")
+        await message.answer("❌ Неверный формат даты. Используйте ДД.ММ.ГГГГ или /skip для пропуска:", reply_markup=cancel_keyboard())
+        # Не меняем состояние, позволяем повторный ввод
         return
     
     task_id = str(int(time.time()))
@@ -874,6 +908,7 @@ async def save_task_handler(message: types.Message, state: FSMContext):
         f"✅ Задача добавлена!\n"
         f"ID: `{task_id}`\n"
         f"Дедлайн: {deadline if deadline else 'не установлен'}",
+        parse_mode='Markdown', # Указываем parse_mode
         reply_markup=tasks_admin_keyboard()
     )
     await state.clear()
