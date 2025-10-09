@@ -2355,10 +2355,10 @@ def get_pending_orders(limit: int = 10) -> list:
             cursor.execute('''
                 SELECT id, user_id, order_data, attempt_count
                 FROM order_queue 
-                WHERE status = (status = 'pending' OR (status = 'failed' AND attempt_count < ?))
+                WHERE (status = 'pending' OR (status = 'failed' AND attempt_count < ?))
                 ORDER BY created_at ASC
                 LIMIT ?
-            ''', (MAX_ATTEMPTS, limit,))
+            ''', (MAX_ATTEMPTS, limit))
             rows = cursor.fetchall()
             orders = []
             for row in rows:
