@@ -2347,16 +2347,17 @@ async def add_order_to_queue(user_id: int, order_data: dict) -> bool:
 # --- Функция для получения заказов из очереди ---
 def get_pending_orders(limit: int = 10) -> list:
     """Получает список заказов, ожидающих обработки."""
+    MAX_ATTEMPTS = 5
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT id, user_id, order_data, attempt_count
                 FROM order_queue 
-                WHERE status = 'pending' 
+                WHERE status = (status = 'pending' OR (status = 'failed' AND attempt_count < ?))
                 ORDER BY created_at ASC
                 LIMIT ?
-            ''', (limit,))
+            ''', (MAX_ATTEMPTS, limit,))
             rows = cursor.fetchall()
             orders = []
             for row in rows:
@@ -2456,6 +2457,7 @@ async def process_order_queue(bot_instance):
                 user_id = order_item['user_id']
                 order_data = order_item['order_data']
                 attempt_count = order_item['attempt_count']
+                max_retries = 5
                 
                 # Помечаем заказ как "в обработке"
                 update_order_status(order_id, 'processing')
@@ -2496,12 +2498,12 @@ async def process_order_queue(bot_instance):
                     # Обновляем статус на 'failed' и сохраняем ошибку
                     update_order_status(order_id, 'failed', error_message=error_msg)
                     
-                    # Если это была первая попытка, уведомляем админа
-                    if attempt_count == 0:
+                    # Если это была последняя попытка, уведомляем админа
+                    if attempt_count + 1 >= max_retries:
                         for admin_id in ADMINS:
                             try:
                                 admin_msg = (
-                                    f"🚨 Ошибка записи заказа из очереди!\n"
+                                    f"🚨 Окончательная ошибка записи заказа из очереди!\n"
                                     f"• ID записи в БД: <code>{order_id}</code>\n"
                                     f"• Пользователь: <code>{user_id}</code>\n"
                                     f"• Артикул: <code>{order_data.get('article', 'N/A')}</code>\n"
