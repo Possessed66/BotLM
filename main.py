@@ -2348,6 +2348,7 @@ async def add_order_to_queue(user_id: int, order_data: dict) -> bool:
 def get_pending_orders(limit: int = 10) -> list:
     """Получает список заказов, ожидающих обработки."""
     MAX_ATTEMPTS = 5
+    
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -2441,12 +2442,16 @@ async def process_order_queue(bot_instance):
     
     while worker_running:
         try:
+            logging.info("🔄 process_order_queue: Начало цикла обработки очереди.")
             # --- Получаем заказы из очереди ---
             pending_orders = get_pending_orders(limit=5) # Обрабатываем до 5 заказов за раз
             
+            logging.info(f"📥 process_order_queue: Получено {len(pending_orders)} заказов из get_pending_orders.")
+            
             if not pending_orders:
+                logging.info("📭 process_order_queue: Очередь пуста или нет подходящих заказов. Сплю 120 секунд.")
                 # Если заказов нет, немного ждем
-                await asyncio.sleep(120) # Пауза 5 минут
+                await asyncio.sleep(120) # Пауза 2 минуты (в вашем коде 120)
                 continue
             
             logging.info(f"📥 Найдено {len(pending_orders)} заказов для обработки.")
