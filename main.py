@@ -2832,15 +2832,40 @@ async def get_supplier_data_from_db(supplier_id: str, shop: str) -> Optional[Dic
 @dp.update.middleware()
 async def service_mode_middleware(handler, event, data):
     """Проверка сервисного режима"""
-    if SERVICE_MODE and (event.message or event.callback_query):
-        user_id = event.message.from_user.id if event.message else event.callback_query.from_user.id
-        if user_id not in ADMINS:
+    if SERVICE_MODE and (hasattr(event, 'message') or hasattr(event, 'callback_query')):
+        user_id = (
+            event.message.from_user.id 
+            if hasattr(event, 'message') and event.message 
+            else (event.callback_query.from_user.id if hasattr(event, 'callback_query') and event.callback_query else None)
+        )
+        if user_id and user_id not in ADMINS:
             msg = "⏳ Бот в режиме обслуживания. Попробуйте позже."
-            if event.message:
-                await event.message.answer(msg)
-            elif event.callback_query:
-                await event.callback_query.answer(msg, show_alert=True)
-            return
+            
+            # --- ОТВЕЧАЕМ НА CALLBACK_QUERY СРАЗУ, ЕСЛИ ОН ЕСТЬ ---
+            if hasattr(event, 'callback_query') and event.callback_query:
+                try:
+                    # Отвечаем на запрос, чтобы не превысить таймаут
+                    await event.callback_query.answer(msg, show_alert=True)
+                    # logging.info(f"Отправлен ответ на callback_query для user_id {user_id} в сервисном режиме.")
+                except Exception as e:
+                    # Если ответить не удалось (например, из-за таймаута, который уже наступил из-за другого middleware),
+                    # просто логируем и не прерываем цепочку (handler не вызываем).
+                    logging.warning(f"Не удалось ответить на callback_query в service_mode_middleware: {e}")
+                    return # Важно: не вызываем handler, так как пользователю уже отправлено сообщение.
+            # ----------------------------------------------------
+            
+            # --- ОТПРАВЛЯЕМ СООБЩЕНИЕ (ЭТО МОЖЕТ БЫТЬ МЕДЛЕННО, НО callback_query УЖЕ ОТВЕЧЕН) ---
+            if hasattr(event, 'message') and event.message:
+                try:
+                    await event.message.answer(msg)
+                    # logging.info(f"Отправлено сообщение о сервисном режиме user_id {user_id}.")
+                except Exception as e:
+                    logging.warning(f"Не удалось отправить сообщение о сервисном режиме: {e}")
+            # ----------------------------------------------------
+            
+            # Не вызываем следующий middleware/handler
+            return 
+    # Если сервисный режим выключен или пользователь - админ, продолжаем
     return await handler(event, data)
 
 @dp.update.middleware()
