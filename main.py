@@ -378,6 +378,11 @@ class TaskStates(StatesGroup):
 class ManagerApprovalStates(StatesGroup):
     awaiting_reject_comment = State()
 
+
+class FeedbackStates(StatesGroup):
+    waiting_for_feedback = State()
+
+
 # ===================== КЛАВИАТУРЫ =====================
 def create_keyboard(buttons: List[str], sizes: tuple, resize=True, one_time=False) -> types.ReplyKeyboardMarkup:
     """Универсальный конструктор клавиатур"""
@@ -392,7 +397,7 @@ def create_keyboard(buttons: List[str], sizes: tuple, resize=True, one_time=Fals
 
 def main_menu_keyboard(user_id: int = None) -> types.ReplyKeyboardMarkup:
     """Главное меню с учетом прав"""
-    buttons = ["📋 Запрос информации", "📦 Проверка стока", "🛒 Заказ под клиента"]
+    buttons = ["📋 Запрос информации", "🛒 Заказ под клиента", "📞 Обратная связь",]
     if user_id and user_id in ADMINS:
         buttons.append("🛠 Админ-панель")
     return create_keyboard(buttons, (2, 1, 1))
@@ -3044,6 +3049,50 @@ async def cancel_handler(message: types.Message, state: FSMContext):
         await state.clear()
         await message.answer("🔄 Операция отменена", 
                             reply_markup=main_menu_keyboard(message.from_user.id))
+
+
+@dp.message(F.text == "📞 Обратная связь")
+async def handle_feedback_start(message: types.Message, state: FSMContext):
+    """Начало процесса обратной связи."""
+    await message.answer(
+        "📝 Пожалуйста, введите ваше сообщение, пожелание или предложение. "
+        "Это будет отправлено анонимно администраторам.",
+        reply_markup=cancel_keyboard() # Используем клавиатуру с кнопкой "Отмена"
+    )
+    await state.set_state(FeedbackStates.waiting_for_feedback)
+
+@dp.message(FeedbackStates.waiting_for_feedback, F.text)
+async def handle_feedback_message(message: types.Message, state: FSMContext):
+    """Получение и отправка сообщения обратной связи администраторам."""
+    feedback_text = message.text
+
+    # Отправляем сообщение администраторам
+    admin_notification = f"📢 <b>Новое сообщение обратной связи (анонимно)</b>\n\n{feedback_text}"
+
+    for admin_id in ADMINS:
+        try:
+            await bot.send_message(chat_id=admin_id, text=admin_notification, parse_mode='HTML')
+            logging.info(f"Сообщение обратной связи отправлено администратору {admin_id}")
+        except Exception as e:
+            logging.error(f"Не удалось отправить сообщение обратной связи администратору {admin_id}: {e}")
+
+    # Уведомляем пользователя об успешной отправке
+    await message.answer(
+        "✅ Спасибо за ваше сообщение! Оно анонимно отправлено администраторам.",
+        reply_markup=main_menu_keyboard(message.from_user.id) # Возвращаем к главному меню
+    )
+    await state.clear() # Очищаем состояние
+
+
+@dp.message(FeedbackStates.waiting_for_feedback, F.text == "❌ Отмена")
+async def cancel_feedback(message: types.Message, state: FSMContext):
+    """Отмена отправки обратной связи."""
+    await message.answer(
+        "❌ Отправка сообщения отменена.",
+        reply_markup=main_menu_keyboard(message.from_user.id) # Возвращаем к главному меню
+    )
+    await state.clear()
+
 
 # Заказ товара
 @dp.message(F.text == "🛒 Заказ под клиента")
