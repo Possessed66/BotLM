@@ -3,11 +3,12 @@ import logging
 import os
 
 # --- Настройки подключения к НОВОЙ БД SQLite ---
-# Укажите путь к новому файлу базы данных
-DB_PATH = '/path/to/your/rating_system.db' # ЗАМЕНИТЕ НА РЕАЛЬНЫЙ ПУТЬ НА ВАШЕМ СЕРВЕРЕ
+# БД будет создана в той же директории, где находится этот скрипт
+DB_PATH = os.path.join(os.path.dirname(__file__), 'rating_system.db')
 DATABASE_URL = f'sqlite:///{DB_PATH}'
 
 # Проверим, существует ли директория для файла БД, и создадим, если нет
+# (Хотя в данном случае директория - та же, что и скрипт, она, скорее всего, уже есть)
 db_dir = os.path.dirname(DB_PATH)
 if db_dir and not os.path.exists(db_dir):
     os.makedirs(db_dir)
@@ -95,7 +96,7 @@ def create_tables():
             conn.execute(text(create_index_week_dept))
             conn.execute(text(create_index_store))
             conn.execute(text(create_index_dept))
-            conn.execute(text(create_index_week_start)) # Добавлен индекс на weeks
+            conn.execute(text(create_index_week_start))
             trans.commit()
             logger.info("Таблицы успешно созданы (или уже существовали).")
         except Exception as e:
