@@ -3,10 +3,10 @@ import sqlalchemy
 from sqlalchemy import create_engine, text
 import logging
 from typing import Dict, Any
-import os # Добавляем импорт os
+import os
+from datetime import datetime, timedelta
 
 # --- Настройки подключения к БД SQLite ---
-# БД будет ожидаться в той же директории, где находится этот скрипт
 DB_PATH = os.path.join(os.path.dirname(__file__), 'rating_system.db')
 DATABASE_URL = f'sqlite:///{DB_PATH}'
 
@@ -16,9 +16,10 @@ engine = create_engine(DATABASE_URL)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- Определение структуры ожидаемого CSV ---
+# --- Определение структуры ожидаемого CSV (обновлённая) ---
 EXPECTED_CSV_COLUMNS = {
-    'week_start_date': 'date',
+    'year': 'int', # Новый столбец
+    'week_number': 'int', # Новый столбец
     'store_id': 'int',
     'department_id': 'int',
     'uto_value': 'float',
@@ -58,10 +59,10 @@ def validate_csv(df: pd.DataFrame) -> bool:
             logger.error(f"Ошибка типа данных в столбце '{col}'. Ожидался тип {expected_type}.")
             return False
 
-    df['week_start_date'] = pd.to_datetime(df['week_start_date']).dt.date
-    duplicates = df.duplicated(subset=['week_start_date', 'store_id', 'department_id'])
+    # Проверка уникальности комбинации year, week_number, store_id, department_id
+    duplicates = df.duplicated(subset=['year', 'week_number', 'store_id', 'department_id'])
     if duplicates.any():
-        logger.error(f"Найдены дубликаты строк для комбинаций (week_start_date, store_id, department_id).")
+        logger.error(f"Найдены дубликаты строк для комбинаций (year, week_number, store_id, department_id).")
         print(df[duplicates])
         return False
 
@@ -84,6 +85,25 @@ def load_csv_to_db(csv_file_path: str):
     if not validate_csv(df):
         logger.error("CSV не прошёл валидацию. Загрузка отменена.")
         return
+
+    # --- Ключевое изменение: вычисление week_start_date из year и week_number ---
+    def iso_year_start(y):
+        """Возвращает дату понедельника первой недели ISO-календаря для года y."""
+        fourth_jan = datetime(y, 1, 4)
+        delta = timedelta(fourth_jan.isoweekday() - 1)
+        return fourth_jan - delta
+
+    def iso_to_gregorian(year, week, day):
+        """Преобразует ISO-номер недели в григорианскую дату."""
+        year_start = iso_year_start(year)
+        return year_start + timedelta(weeks=week - 1, days=day - 1)
+
+    # Применяем функцию к каждой строке для вычисления даты начала недели (понедельника)
+    df['week_start_date'] = df.apply(lambda row: iso_to_gregorian(int(row['year']), int(row['week_number']), 1), axis=1)
+    df['week_start_date'] = df['week_start_date'].dt.date # Преобразуем в формат date
+
+    # Теперь у нас есть 'week_start_date' в формате date
+    # Дальнейшая логика аналогична предыдущей версии, но использует 'week_start_date'
 
     # Получение week_id для каждой даты недели
     unique_week_dates = df[['week_start_date']].drop_duplicates()
@@ -109,7 +129,7 @@ def load_csv_to_db(csv_file_path: str):
     df_with_week_id = df.merge(df_weeks_from_db, on='week_start_date', how='left')
     
     if df_with_week_id['week_id'].isna().any():
-         logger.error("Некоторые даты из CSV не найдены в таблице weeks после попытки вставки.")
+         logger.error("Некоторые вычисленные даты начала недели из CSV не найдены в таблице weeks после попытки вставки.")
          return
 
     df_for_db = df_with_week_id[['week_id', 'store_id', 'department_id', 'uto_value', 'bests_value', 'tc_percent_value', 'twenty_eighty_percent_value', 'turnover_value', 'gold_value']].copy()
