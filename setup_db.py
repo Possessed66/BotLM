@@ -1,9 +1,17 @@
 from sqlalchemy import create_engine, text
 import logging
+import os
 
-# --- Настройки подключения к БД SQLite ---
-DB_PATH = 'your_database.db' # Укажите путь к файлу вашей БД
+# --- Настройки подключения к НОВОЙ БД SQLite ---
+# Укажите путь к новому файлу базы данных
+DB_PATH = '/path/to/your/rating_system.db' # ЗАМЕНИТЕ НА РЕАЛЬНЫЙ ПУТЬ НА ВАШЕМ СЕРВЕРЕ
 DATABASE_URL = f'sqlite:///{DB_PATH}'
+
+# Проверим, существует ли директория для файла БД, и создадим, если нет
+db_dir = os.path.dirname(DB_PATH)
+if db_dir and not os.path.exists(db_dir):
+    os.makedirs(db_dir)
+    print(f"Создана директория для базы данных: {db_dir}")
 
 engine = create_engine(DATABASE_URL)
 
@@ -12,8 +20,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 def create_tables():
-    """Создаёт таблицы в БД, если они не существуют."""
-    logger.info("Начинаю создание таблиц...")
+    """Создаёт таблицы в НОВОЙ БД, если они не существуют."""
+    logger.info(f"Начинаю создание таблиц в БД: {DB_PATH}")
 
     # SQL-запросы для создания таблиц
     create_weeks = """
@@ -72,16 +80,14 @@ def create_tables():
     CREATE INDEX IF NOT EXISTS idx_dept ON weekly_data (department_id);
     """
 
-    # ИСПРАВЛЕНО: Обычная строка присвоена переменной
     create_index_week_start = """
-    CREATE INDEX IF NOT EXISTS idx_week_start_date ON weeks (week_start_date); -- Индекс на дату недели
+    CREATE INDEX IF NOT EXISTS idx_week_start ON weeks (week_start_date); -- Индекс на дату недели
     """
 
     # Выполнение запросов
     with engine.connect() as conn:
         trans = conn.begin()
         try:
-            # Все строки запросов передаются через переменные
             conn.execute(text(create_weeks))
             conn.execute(text(create_stores))
             conn.execute(text(create_departments))
@@ -89,11 +95,14 @@ def create_tables():
             conn.execute(text(create_index_week_dept))
             conn.execute(text(create_index_store))
             conn.execute(text(create_index_dept))
-            # ИСПРАВЛЕНО: Теперь правильно передаётся переменная
-            conn.execute(text(create_index_week_start))
+            conn.execute(text(create_index_week_start)) # Добавлен индекс на weeks
             trans.commit()
             logger.info("Таблицы успешно созданы (или уже существовали).")
         except Exception as e:
             trans.rollback()
             logger.error(f"Ошибка при создании таблиц: {e}")
             raise
+
+if __name__ == "__main__":
+    create_tables()
+    logger.info("Создание базы данных и таблиц завершено.")
