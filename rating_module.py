@@ -3,9 +3,11 @@ import sqlalchemy
 from sqlalchemy import create_engine, text
 import logging
 from typing import Dict, Any
+import os # Добавляем импорт os
 
 # --- Настройки подключения к БД SQLite ---
-DB_PATH = '/path/to/your/database.db' # Укажите путь к файлу вашей БД
+# БД будет ожидаться в той же директории, где находится этот скрипт
+DB_PATH = os.path.join(os.path.dirname(__file__), 'rating_system.db')
 DATABASE_URL = f'sqlite:///{DB_PATH}'
 
 engine = create_engine(DATABASE_URL)
@@ -86,11 +88,9 @@ def load_csv_to_db(csv_file_path: str):
     # Получение week_id для каждой даты недели
     unique_week_dates = df[['week_start_date']].drop_duplicates()
     try:
-        # Используем метод 'multi' для более эффективной вставки
         unique_week_dates.to_sql('weeks', engine, if_exists='append', index=False, method='multi')
         logger.info("Вставлены новые даты недель в таблицу weeks (если были).")
     except sqlalchemy.exc.IntegrityError:
-        # Если дата уже есть, ошибка дубликата не страшна
         logger.info("Данные о дате недели уже существуют в таблице weeks.")
     except Exception as e:
         logger.error(f"Ошибка при вставке дат недель: {e}")
@@ -149,9 +149,6 @@ def calculate_ratings_for_new_data():
                     direction = rating_info['direction']
 
                     # Подзапрос для вычисления новых рейтингов
-                    # Используем ROW_NUMBER() вместо RANK(), если возможны одинаковые значения и важен порядок
-                    # RANK() в SQLite тоже работает, но ROW_NUMBER() даст строгое 1, 2, 3... даже при равных значениях
-                    # Для RANK() замените ROW_NUMBER() на RANK()
                     subquery = f"""
                         SELECT id,
                                ROW_NUMBER() OVER (
@@ -162,24 +159,20 @@ def calculate_ratings_for_new_data():
                         WHERE week_id = ? AND department_id = ? AND {value_col} IS NOT NULL
                     """
 
-                    subquery = subquery.replace("ROW_NUMBER()", "RANK()")
-
                     # Основной UPDATE запрос
-                    # В SQLite используем ? как плейсхолдеры для параметров
                     update_query = text(f"""
                         UPDATE weekly_data
                         SET {rating_col} = (
                             SELECT new_rating
                             FROM (
                                 {subquery}
-                            )
-                            WHERE weekly_data.id = subquery.id
+                            ) AS ranked_subquery
+                            WHERE weekly_data.id = ranked_subquery.id
                         )
                         WHERE (week_id, department_id) = (?, ?)
                           AND {value_col} IS NOT NULL;
                     """)
                     # Выполняем запрос с параметрами
-                    # Плейсхолдеры: ?, ?, ?, ? (week_id, dept_id, week_id, dept_id)
                     conn.execute(update_query, (week_id, dept_id, week_id, dept_id))
 
             trans.commit()
@@ -197,4 +190,3 @@ def process_csv_and_update_ratings(csv_file_path: str):
     load_csv_to_db(csv_file_path)
     calculate_ratings_for_new_data()
     logger.info("Процесс обработки CSV завершён.")
-
