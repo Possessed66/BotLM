@@ -165,7 +165,7 @@ def calculate_ratings_for_new_data():
     """
     Вычисляет рейтинги для новых записей в weekly_data.
     Новые - это те, у которых хотя бы один из столбцов _rating равен NULL.
-    Использует UPDATE ... WHERE ... IN (SELECT ...) для совместимости с SQLite.
+    Использует pandas и отдельные UPDATE запросы для совместимости с SQLite.
     """
     logger.info("Начинаю расчёт рейтингов для новых данных...")
 
@@ -188,32 +188,32 @@ def calculate_ratings_for_new_data():
                     rating_col = rating_info['rating_col']
                     direction = rating_info['direction']
 
-                    # Подзапрос для вычисления новых рейтингов
-                    subquery = f"""
-                        SELECT id,
-                               ROW_NUMBER() OVER (
-                                   PARTITION BY week_id, department_id
-                                   ORDER BY {value_col} {direction}
-                               ) AS new_rating
+                    # --- НОВАЯ ЛОГИКА ---
+                    # 1. Получаем текущие id и значения для расчёта рейтинга
+                    select_query = text(f"""
+                        SELECT id, {value_col}
                         FROM weekly_data
-                        WHERE week_id = ? AND department_id = ? AND {value_col} IS NOT NULL
-                    """
-
-                    # Основной UPDATE запрос
-                    update_query = text(f"""
-                        UPDATE weekly_data
-                        SET {rating_col} = (
-                            SELECT new_rating
-                            FROM (
-                                {subquery}
-                            ) AS ranked_subquery
-                            WHERE weekly_data.id = ranked_subquery.id
-                        )
-                        WHERE (week_id, department_id) = (?, ?)
-                          AND {value_col} IS NOT NULL;
+                        WHERE week_id = :week_id AND department_id = :dept_id AND {value_col} IS NOT NULL
+                        ORDER BY {value_col} {direction}
                     """)
-                    # Выполняем запрос с параметрами
-                    conn.execute(update_query, (week_id, dept_id, week_id, dept_id))
+                    result_set = conn.execute(select_query, {"week_id": week_id, "dept_id": dept_id})
+                    rows = result_set.fetchall()
+
+                    # 2. Вычисляем рейтинг (ранг) в Python (ROW_NUMBER())
+                    new_ratings = []
+                    for rank_num, row in enumerate(rows, start=1):
+                        new_ratings.append({'id': row[0], 'new_rating': rank_num})
+
+                    # 3. Обновляем рейтинги для каждой строки
+                    if new_ratings: # Проверяем, есть ли что обновлять
+                        update_query = text(f"""
+                            UPDATE weekly_data
+                            SET {rating_col} = :new_rating
+                            WHERE id = :id;
+                        """)
+                        # Выполняем пакетное обновление
+                        conn.execute(update_query, new_ratings) # Передаём список словарей
+
 
             trans.commit()
             logger.info("Расчёт рейтингов завершён успешно.")
