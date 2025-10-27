@@ -74,21 +74,13 @@ def load_csv_to_db(csv_file_path: str):
     logger.info(f"Начинаю загрузку CSV: {csv_file_path}")
     
     try:
-        # Читаем CSV, пытаясь автоматически определить разделитель
-        # engine='python' позволяет использовать sep=None для автоопределения
-        df = pd.read_csv(csv_file_path, sep=None, engine='python')
-        logger.info(f"Файл CSV успешно прочитан с разделителем: '{df.columns.str.contains(';').any()}' -> вероятно ';', или ',' если нет.")
-        # pandas при sep=None выводит предупреждение, если находит неоднозначность,
-        # но в простых случаях сам выбирает первый найденный разделитель (, или ; и т.д.).
-        # Для корректной работы, важно, чтобы строка заголовков была первой и не содержала лишних данных.
+        # УКАЗЫВАЕМ РАЗДЕЛИТЕЛЬ ЯВНО
+        df = pd.read_csv(csv_file_path, sep=';')
     except FileNotFoundError:
         logger.error(f"Файл не найден: {csv_file_path}")
         return
-    except pd.errors.ParserError as e:
-        logger.error(f"Ошибка парсинга CSV (неверный формат или разделитель): {e}")
-        return
     except Exception as e:
-        logger.error(f"Неизвестная ошибка при чтении CSV: {e}")
+        logger.error(f"Ошибка при чтении CSV: {e}")
         return
 
     # ВАЖНО: После автоопределения разделителя, df.columns будут содержать "сырые" названия
