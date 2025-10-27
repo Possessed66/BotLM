@@ -70,18 +70,50 @@ def validate_csv(df: pd.DataFrame) -> bool:
     return True
 
 def load_csv_to_db(csv_file_path: str):
-    """Загружает валидный CSV в таблицу weekly_data."""
+    """Загружает валидный CSV в таблицу weekly_data. Автоопределение разделителя."""
     logger.info(f"Начинаю загрузку CSV: {csv_file_path}")
     
     try:
-        df = pd.read_csv(csv_file_path)
+        # Читаем CSV, пытаясь автоматически определить разделитель
+        # engine='python' позволяет использовать sep=None для автоопределения
+        df = pd.read_csv(csv_file_path, sep=None, engine='python')
+        logger.info(f"Файл CSV успешно прочитан с разделителем: '{df.columns.str.contains(';').any()}' -> вероятно ';', или ',' если нет.")
+        # pandas при sep=None выводит предупреждение, если находит неоднозначность,
+        # но в простых случаях сам выбирает первый найденный разделитель (, или ; и т.д.).
+        # Для корректной работы, важно, чтобы строка заголовков была первой и не содержала лишних данных.
     except FileNotFoundError:
         logger.error(f"Файл не найден: {csv_file_path}")
         return
+    except pd.errors.ParserError as e:
+        logger.error(f"Ошибка парсинга CSV (неверный формат или разделитель): {e}")
+        return
     except Exception as e:
-        logger.error(f"Ошибка при чтении CSV: {e}")
+        logger.error(f"Неизвестная ошибка при чтении CSV: {e}")
         return
 
+    # ВАЖНО: После автоопределения разделителя, df.columns будут содержать "сырые" названия
+    # столбцов. Если в файле был заголовок "year;week_number;...", то первый столбец будет
+    # назван как "year;week_number;store_id;...". Это НЕПРАВИЛЬНО.
+    # Автоопределение sep=None работает, если заголовок *не* содержит лишних данных.
+    # Если первая строка файла - это именно заголовки, разделённые *одним* типом разделителя,
+    # то pandas его определит и заголовки распарсит корректно.
+    # Проверим, содержит ли первый элемент columns более одного потенциального заголовка.
+    # Если да, значит, pandas не смог корректно распарсить заголовки, и sep нужно указать вручную.
+    first_col_name = str(df.columns[0]) if not df.empty else ""
+    if ';' in first_col_name or ',' in first_col_name:
+        # Скорее всего, заголовки не были разделены правильно
+        logger.error(f"Не удалось корректно распознать заголовки CSV. "
+                     f"Первый 'столбец' в заголовках: '{first_col_name}'. "
+                     f"Возможно, файл использует неожиданный разделитель.")
+        # Попробуем снова, указав явно точку с запятой, как в вашем примере
+        try:
+            df = pd.read_csv(csv_file_path, sep=';')
+            logger.info("Повторная попытка чтения CSV с явным указанием разделителя ';' успешна.")
+        except Exception as e:
+            logger.error(f"Ошибка при чтении CSV с разделителем ';': {e}")
+            return
+
+    # Теперь df должен быть корректно прочитан с нужными столбцами
     if not validate_csv(df):
         logger.error("CSV не прошёл валидацию. Загрузка отменена.")
         return
@@ -102,10 +134,7 @@ def load_csv_to_db(csv_file_path: str):
     df['week_start_date'] = df.apply(lambda row: iso_to_gregorian(int(row['year']), int(row['week_number']), 1), axis=1)
     df['week_start_date'] = df['week_start_date'].dt.date # Преобразуем в формат date
 
-    # Теперь у нас есть 'week_start_date' в формате date
-    # Дальнейшая логика аналогична предыдущей версии, но использует 'week_start_date'
-
-    # Получение week_id для каждой даты недели
+    # Дальнейшая логика аналогична предыдущей версии
     unique_week_dates = df[['week_start_date']].drop_duplicates()
     try:
         unique_week_dates.to_sql('weeks', engine, if_exists='append', index=False, method='multi')
@@ -116,7 +145,6 @@ def load_csv_to_db(csv_file_path: str):
         logger.error(f"Ошибка при вставке дат недель: {e}")
         return
 
-    # Используем pandas merge для получения week_id
     try:
         with engine.connect() as conn:
             df_weeks_from_db = pd.read_sql("SELECT week_id, week_start_date FROM weeks;", conn)
