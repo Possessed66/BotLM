@@ -3569,12 +3569,6 @@ async def cancel_info_and_return_home(message: types.Message, state: FSMContext)
     await message.answer("Вы в главном меню.", reply_markup=main_menu_keyboard(message.from_user.id))
     await state.clear() # Очищаем всё состояние после завершения сценария
 
-# --- Опционально: Обработчик для неожиданного текста в состоянии waiting_for_action ---
-@dp.message(InfoRequest.waiting_for_action)
-async def unexpected_input_waiting_action(message: types.Message):
-    """Обработка неожиданного ввода в состоянии ожидания действия."""
-    await message.answer("Пожалуйста, используйте кнопки 'Заказать этот товар' или 'В главное меню'.")
-
 
 @dp.message(InfoRequest.waiting_for_action, F.text == "🔄 Повторить ввод артикула")
 async def repeat_article_input(message: types.Message, state: FSMContext):
@@ -3594,6 +3588,12 @@ async def repeat_article_input(message: types.Message, state: FSMContext):
     # Запрашиваем новый артикул
     await message.answer("🔢 Введите новый артикул товара:", reply_markup=cancel_keyboard())
     await state.set_state(InfoRequest.article_input)
+    
+# --- Опционально: Обработчик для неожиданного текста в состоянии waiting_for_action ---
+@dp.message(InfoRequest.waiting_for_action)
+async def unexpected_input_waiting_action(message: types.Message):
+    """Обработка неожиданного ввода в состоянии ожидания действия."""
+    await message.answer("Пожалуйста, используйте кнопки 'Заказать этот товар' или 'В главное меню'.")
 
 
 # Запрос информации о товаре
