@@ -3533,15 +3533,31 @@ async def initiate_order_from_info(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
+    # --- ОБЯЗАТЕЛЬНО: Получаем и сохраняем информацию о пользователе ---
+    user_data = await get_user_data(user_id)
+    if not user_data:
+        logging.error(f"Профиль не найден для {user_id} при попытке начать заказ из информации.")
+        await message.answer("❌ Ваш профиль не найден. Пройдите регистрацию через /start")
+        await state.clear()
+        return
+
+    user_name = f"{user_data.get('name', 'N/A')} {user_data.get('surname', 'N/A')}".strip() or "Неизвестный пользователь"
+    user_position = user_data.get('position', 'Не указана')
+    # --------------------------------------------------------
+
     # Обновляем last_activity
     await state.update_data(last_activity=datetime.now().isoformat())
 
-    # Сохраняем только артикул в состоянии для следующего шага
-    await state.update_data(article=article)
+    # Сохраняем артикул И информацию о пользователе в состоянии для следующего шага
+    await state.update_data(
+        article=article,
+        user_name=user_name,      
+        user_position=user_position # <-- Сохраняем должность
+    )
 
     # --- Переход к выбору магазина ---
-    await message.answer("📌 Выберите магазин для заказа:", reply_markup=quick_shop_selection_keyboard()) # Используем клавиатуру выбора магазина
-    await state.set_state(OrderStates.shop_selection) # Переходим в состояние выбора магазина
+    await message.answer("📌 Выберите магазин для заказа:", reply_markup=quick_shop_selection_keyboard())
+    await state.set_state(OrderStates.shop_selection)
     # ---------------------------
 
     logging.info(f"Инициирован процесс заказа для товара {article} из состояния информации. Ожидается выбор магазина.")
