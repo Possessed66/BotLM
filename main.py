@@ -2204,20 +2204,20 @@ async def handle_manager_reject_comment(message: types.Message, state: FSMContex
             # Подтверждение менеджеру
             await message.answer(
                 "✅ Отказ оформлен. Пользователь уведомлен с комментарием.",
-                reply_markup=types.ReplyKeyboardRemove() # Или основная клавиатура менеджера
+                reply_markup=main_menu_keyboard(message.from_user.id) # Или основная клавиатура менеджера
             )
             
         except Exception as e:
             logging.error(f"❌ Не удалось отправить уведомление об отказе пользователю {user_id}: {e}")
             await message.answer(
                 "✅ Отказ оформлен, но не удалось уведомить пользователя.",
-                reply_markup=types.ReplyKeyboardRemove()
+                reply_markup=main_menu_keyboard(message.from_user.id)
             )
     else:
         # Ошибка при обновлении статуса в БД
         await message.answer(
             "❌ Ошибка при оформлении отказа в базе данных.",
-            reply_markup=types.ReplyKeyboardRemove()
+            reply_markup=main_menu_keyboard(message.from_user.id)
         )
     
     # В любом случае (успех или ошибка) очищаем состояние менеджера
