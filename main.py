@@ -343,7 +343,7 @@ class OrderStates(StatesGroup):
 
 class InfoRequest(StatesGroup):
     article_input = State()
-
+    waiting_for_action = State()
 
 class AdminBroadcast(StatesGroup):
     message_input = State()
@@ -3516,6 +3516,70 @@ async def correct_quantity(message: types.Message, state: FSMContext):
     await state.set_state(OrderStates.quantity_input)
 
 
+@dp.message(InfoRequest.waiting_for_action, F.text == "🛒 Заказать этот товар")
+async def initiate_order_from_info(message: types.Message, state: FSMContext):
+    """Инициирует процесс заказа на основе информации, полученной ранее."""
+    user_id = message.from_user.id
+    logging.info(f"Пользователь {user_id} выбрал 'Заказать этот товар' из информации.")
+
+    # Получаем данные товара из состояния
+    data = await state.get_data()
+    article = data.get('article')
+    # selected_shop НЕ используется, так как мы переходим к выбору магазина
+
+    if not article:
+        logging.error(f"Артикул отсутствует в состоянии при попытке заказать из информации для user_id {user_id}.")
+        await message.answer("❌ Произошла ошибка при подготовке заказа. Попробуйте снова.")
+        await state.clear()
+        return
+
+    # Обновляем last_activity
+    await state.update_data(last_activity=datetime.now().isoformat())
+
+    # Сохраняем только артикул в состоянии для следующего шага
+    await state.update_data(article=article)
+
+    # --- Переход к выбору магазина ---
+    await message.answer("📌 Выберите магазин для заказа:", reply_markup=quick_shop_selection_keyboard()) # Используем клавиатуру выбора магазина
+    await state.set_state(OrderStates.shop_selection) # Переходим в состояние выбора магазина
+    # ---------------------------
+
+    logging.info(f"Инициирован процесс заказа для товара {article} из состояния информации. Ожидается выбор магазина.")
+
+# --- Хендлер для возврата в главное меню из состояния ожидания действия ---
+@dp.message(InfoRequest.waiting_for_action, F.text == "🏠 В главное меню")
+async def cancel_info_and_return_home(message: types.Message, state: FSMContext):
+    """Отменяет ожидание действия и возвращает в главное меню."""
+    await message.answer("Вы в главном меню.", reply_markup=main_menu_keyboard(message.from_user.id))
+    await state.clear() # Очищаем всё состояние после завершения сценария
+
+# --- Опционально: Обработчик для неожиданного текста в состоянии waiting_for_action ---
+@dp.message(InfoRequest.waiting_for_action)
+async def unexpected_input_waiting_action(message: types.Message):
+    """Обработка неожиданного ввода в состоянии ожидания действия."""
+    await message.answer("Пожалуйста, используйте кнопки 'Заказать этот товар' или 'В главное меню'.")
+
+
+@dp.message(InfoRequest.waiting_for_action, F.text == "🔄 Повторить ввод артикула")
+async def repeat_article_input(message: types.Message, state: FSMContext):
+    """Повторный ввод артикула без выхода из раздела информации."""
+    user_id = message.from_user.id
+    logging.info(f"Пользователь {user_id} выбрал 'Повторить ввод артикула'.")
+
+    # Очищаем только информацию о предыдущем артикуле, но остаёмся в сценарии информации
+    # Не очищаем всё состояние, чтобы не потерять shop, если он был сохранён ранее в этом сеансе
+    # Просто удалим ключи, связанные с конкретным товаром
+    current_data = await state.get_data()
+    # Удаляем только те ключи, которые относятся к предыдущему запросу
+    keys_to_remove = ['article', 'product_name', 'department', 'supplier_name', 'order_date', 'delivery_date', 'top_in_shop', 'selected_shop'] # Добавьте сюда все ключи, которые хотите сбросить
+    new_data = {k: v for k, v in current_data.items() if k not in keys_to_remove}
+    await state.set_data(new_data)
+
+    # Запрашиваем новый артикул
+    await message.answer("🔢 Введите новый артикул товара:", reply_markup=cancel_keyboard())
+    await state.set_state(InfoRequest.article_input)
+
+
 # Запрос информации о товаре
 @dp.message(F.text == "📋 Запрос информации")
 async def handle_info_request(message: types.Message, state: FSMContext):
@@ -3612,6 +3676,16 @@ async def process_info_request(message: types.Message, state: FSMContext):
             await state.clear()
             return
 
+        await state.update_data(
+            article=article,
+            selected_shop=shop, # Используем shop как selected_shop
+            product_name=product_info['Название'],
+            department=product_info['Отдел'], # Убедитесь, что ключи совпадают с вашими
+            supplier_name=product_info['Поставщик'],
+            order_date=product_info['Дата заказа'],
+            delivery_date=product_info['Дата поставки'],
+            top_in_shop=product_info.get('Топ в магазине', '0') # Убедитесь, что ключ совпадает
+        )
         # Формирование ответа
         response = (
             f"🔍 Информация о товаре:\n"
@@ -3625,17 +3699,30 @@ async def process_info_request(message: types.Message, state: FSMContext):
         )
         
         # Добавляем предупреждение для ТОП 0
-        if product_info.get('Топ в магазине', '0') == '0':
+        top_status = product_info.get('Топ в магазине', '0')
+        if top_status == '0':
             response += "\n\n⚠️ <b>ВНИМАНИЕ: Артикул в ТОП 0!</b>\nСвяжитесь с менеджером для уточнения информации"
+
+        elif top_status in ['1', '2']:
+            response += f"\n\n✅ <b>Статус: ТОП {top_status}</b>\nМожно заказать."
         
-        await message.answer(response, reply_markup=main_menu_keyboard(message.from_user.id))
-        await state.clear()
-        
-        # Логирование успешного завершения
-        logging.info(f"Успешно обработан запрос информации для товара {article} (пользователь: {user_id})")
-        
+        builder = ReplyKeyboardBuilder()
+        builder.button(text="🛒 Заказать этот товар")
+        builder.button(text="🔄 Повторить ввод артикула")
+        builder.button(text="🏠 В главное меню")
+        action_kb = builder.as_markup(resize_keyboard=True)
+        # --------------------------------------------------------------
+
+        # Отправляем сообщение с информацией и клавиатурой
+        await message.answer(response, reply_markup=action_kb)
+
+        # Устанавливаем новое состояние, ожидая действия пользователя
+        await state.set_state(InfoRequest.waiting_for_action)
+
+        logging.info(f"Успешно обработан запрос информации для товара {article} (пользователь: {user_id}). Предложено действие.")
+
     except Exception as e:
-        logging.error(f"Ошибка в обработчике информации: {str(e)}")
+        logging.error(f"Ошибка в обработчике информации: {str(e)}", exc_info=True)
         await message.answer("⚠️ Произошла ошибка при обработке запроса. Попробуйте позже.")
         await state.clear()
 
