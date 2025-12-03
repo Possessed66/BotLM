@@ -468,9 +468,10 @@ def quick_shop_selection_keyboard() -> types.ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     builder.button(text="🏪 Магазин 7")
     builder.button(text="🏪 Магазин 14")
+    builder.button(text="🏪 Магазин 69")
     builder.button(text="🏪 Магазин 94")
     builder.button(text="❌ Отмена") # Добавим кнопку отмены
-    builder.adjust(3, 1) # 3 кнопки в первом ряду, 1 во втором
+    builder.adjust(2, 2, 1) 
     return builder.as_markup(resize_keyboard=True)
 
 
@@ -3254,6 +3255,7 @@ async def process_shop_selection(message: types.Message, state: FSMContext):
     shop_mapping = {
         "🏪 Магазин 7": "7",
         "🏪 Магазин 14": "14",
+        "🏪 Магазин 69": "69",
         "🏪 Магазин 94": "94"
     }
     
