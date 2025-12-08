@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Базы данных и данные
+*.db
+*.sqlite3
+*.csv.bak
+*.log
+import_log.txt
+memory_report.txt
+order_queue
+
+# Секреты и конфиги
+*.env
+secret.env
+config.local
+.env.local
+
+# ОС
+.DS_Store
+Thumbs.db
