@@ -4140,6 +4140,10 @@ async def startup():
         worker_task = asyncio.create_task(process_order_queue(bot))
         logging.info("✅ Фоновый обработчик очереди заказов запущен.")
         logging.info("✅ Кэш загружен, задачи запущены")
+
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        startup_message = f"✅ Бот успешно перезапущен и работает.\nВремя запуска: {current_time}"
+        
     except Exception as e:
         logging.critical(f"🚨 Критическая ошибка запуска: {str(e)}")
         raise
