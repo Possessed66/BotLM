@@ -4143,6 +4143,14 @@ async def startup():
 
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         startup_message = f"✅ Бот успешно перезапущен и работает.\nВремя запуска: {current_time}"
+
+        for admin_id in ADMINS:
+            try:
+                await bot.send_message(chat_id=admin_id, text=startup_message)
+                logging.info(f"✅ Уведомление о запуске отправлено админу {admin_id}")
+            except Exception as e:
+                logging.error(f"❌ Не удалось отправить уведомление админу {admin_id}: {e}")
+                
         
     except Exception as e:
         logging.critical(f"🚨 Критическая ошибка запуска: {str(e)}")
