@@ -3923,12 +3923,21 @@ async def process_info_request(message: types.Message, state: FSMContext):
         elif top_status in ['1', '2']:
             response += f"\n\n✅ <b>Статус: ТОП {top_status}</b>\nМожно заказать."
         
+        holidays = product_info.get('Каникулы', None)
+        exceptions = product_info.get('Исключения', None)
+
+        if holidays:
+            holiday_ranges = format_holidays_ranges(holidays)
+            response += f"\n⚠️ Поставщик находится в каникулах: {holiday_ranges}"
+            if exceptions:
+                exception_dates = ", ".join(d.strftime("%d.%m.%Y") for d in sorted(exceptions))
+                response += f"\n✅ Но принимает заказы: {exception_dates}"
+
         builder = ReplyKeyboardBuilder()
         builder.button(text="🛒 Заказать этот товар")
         builder.button(text="🔄 Повторить ввод артикула")
         builder.button(text="🏠 В главное меню")
         action_kb = builder.as_markup(resize_keyboard=True)
-        # --------------------------------------------------------------
 
         # Отправляем сообщение с информацией и клавиатурой
         await message.answer(response, reply_markup=action_kb)
