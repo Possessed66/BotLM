@@ -16,6 +16,7 @@ import psutil
 import sqlite3
 import gspread.utils
 import uuid
+import tempfile
 from contextlib import contextmanager
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.utils.markdown import markdown_decoration
@@ -37,6 +38,7 @@ from gspread.exceptions import APIError, SpreadsheetNotFound
 from cachetools import LRUCache
 from rating_module import process_csv_and_update_ratings
 from pathlib import Path
+from import_holidays import import_holidays_from_csv
 
 
 
@@ -581,6 +583,82 @@ async def handle_queue_stats(message: types.Message):
         await message.answer("❌ Ошибка получения статистики.")
         
 
+@dp.message(Command("upload_holidays"))
+async def handle_upload_holidays_command(message: types.Message):
+    if message.from_user.id not in ADMINS:
+        await message.answer("❌ У вас нет прав для выполнения этой команды.")
+        return
+
+    await message.answer("📁 Отправьте CSV-файл с данными о каникулах поставщиков (табуляция).")
+
+# --- Обработчик получения файла ---
+@dp.message(lambda m: m.document and m.document.mime_type == 'text/csv')
+async def handle_holidays_file(message: types.Message):
+    
+    if message.from_user.id not in ADMINS:
+         await message.answer("❌ У вас нет прав для выполнения этой команды.")
+         return
+
+    document = message.document
+    file_id = document.file_id
+    file_name = document.file_name
+
+    # Скачиваем файл
+    file = await bot.get_file(file_id)
+    file_path = file.file_path
+
+    # Создаём временный файл
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as temp_file:
+        await bot.download_file(file_path, temp_file.name)
+        temp_csv_path = temp_file.name
+
+    try:
+        # Импортируем данные
+        updated_count = import_holidays_from_csv(temp_csv_path)
+        await message.answer(f"✅ Файл '{file_name}' успешно загружен и обработан. Обновлено {updated_count} записей в базе данных.")
+    except Exception as e:
+        logging.error(f"❌ Ошибка при обработке файла: {e}")
+        await message.answer(f"❌ Ошибка при обработке файла: {str(e)}")
+    finally:
+        # Удаляем временный файл
+        os.unlink(temp_csv_path)
+
+
+def format_holidays_ranges(holidays):
+    """
+    Принимает список дат (datetime.date), возвращает строку вида:
+    "19.12.2025 - 25.12.2025, 27.12.2025, 30.12.2025 - 07.01.2026"
+    """
+    if not holidays:
+        return "нет"
+
+    sorted_dates = sorted(holidays)
+    ranges = []
+    start = sorted_dates[0]
+    end = sorted_dates[0]
+
+    for d in sorted_dates[1:]:
+        if d == end + timedelta(days=1):
+            # Продолжаем диапазон
+            end = d
+        else:
+            # Заканчиваем предыдущий диапазон
+            if start == end:
+                ranges.append(start.strftime("%d.%m.%Y"))
+            else:
+                ranges.append(f"{start.strftime('%d.%m.%Y')} - {end.strftime('%d.%m.%Y')}")
+            # Начинаем новый
+            start = d
+            end = d
+
+    # Не забываем последний
+    if start == end:
+        ranges.append(start.strftime("%d.%m.%Y"))
+    else:
+        ranges.append(f"{start.strftime('%d.%m.%Y')} - {end.strftime('%d.%m.%Y')}")
+
+    return ", ".join(ranges)
+    
 
 # ===================== ЗАДАЧИ =====================
 def normalize_task_row(task_id: str, row: dict) -> dict:
@@ -2557,30 +2635,86 @@ def parse_supplier_data(record: dict) -> Dict[str, Any]:
             order_days.append(int(value))
     
     delivery_days = str(record.get('Срок доставки в магазин', '0')).strip()
+
+    # --- Парсим каникулы ---
+    holidays_str = str(record.get('Каникулы список', '')).strip()
+    holidays = set()
+    if holidays_str:
+        for date_str in holidays_str.split(','):
+            date_str = date_str.strip()
+            if date_str:
+                try:
+                    date_obj = datetime.strptime(date_str, "%d.%m.%Y").date()
+                    holidays.add(date_obj)
+                except ValueError:
+                    logging.warning(f"⚠️ Некорректный формат даты каникул: {date_str}")
+
+    # --- Парсим исключения (заказы внутри каникул) ---
+    exceptions_str = str(record.get('Исключения список', '')).strip()  # <-- НОВОЕ ПОЛЕ
+    exceptions = set()
+    if exceptions_str:
+        for date_str in exceptions_str.split(','):
+            date_str = date_str.strip()
+            if date_str:
+                try:
+                    date_obj = datetime.strptime(date_str, "%d.%m.%Y").date()
+                    exceptions.add(date_obj)
+                except ValueError:
+                    logging.warning(f"⚠️ Некорректный формат даты исключения: {date_str}")
+
     return {
         'supplier_id': str(record.get('Номер осн. пост.', '')),
         'order_days': sorted(list(set(order_days))),
-        'delivery_days': int(delivery_days) if delivery_days.isdigit() else 0
+        'delivery_days': int(delivery_days) if delivery_days.isdigit() else 0,
+        'holidays': holidays,
+        'exceptions': exceptions  # <-- Добавляем исключения
     }
+    
 
 def calculate_delivery_date(supplier_data: dict) -> Tuple[str, str]:
-    """Расчет даты доставки"""
-    today = datetime.now()
+    today = datetime.now().date()
     current_weekday = today.isoweekday()
 
-    # Находим ближайший день заказа
-    nearest_day = None
-    for day in sorted(supplier_data['order_days']):
-        if day >= current_weekday:
-            nearest_day = day
+    order_days = supplier_data['order_days']
+    holidays = supplier_data.get('holidays', set())
+    exceptions = supplier_data.get('exceptions', set())
+
+    # --- 1. Найти ближайший день заказа ---
+    candidate_date = today
+    while True:
+        # Проверяем, является ли день заказа по графику
+        candidate_weekday = candidate_date.isoweekday()
+        is_scheduled_order_day = candidate_weekday in order_days
+
+        # Проверяем, является ли день исключением
+        is_exception = candidate_date in exceptions
+
+        # Если это исключение — можно заказать, даже если не день заказа
+        if is_exception:
+            order_date = candidate_date
             break
-    if not nearest_day:
-        nearest_day = min(supplier_data['order_days'])
-    
-    delta_days = (nearest_day - current_weekday) % 7
-    order_date = today + timedelta(days=delta_days)
-    delivery_date = order_date + timedelta(days=supplier_data['delivery_days'])
-    
+
+        # Если это день заказа и не каникулы — можно заказать
+        if is_scheduled_order_day and candidate_date not in holidays:
+            order_date = candidate_date
+            break
+
+        # Иначе — идём дальше
+        candidate_date += timedelta(days=1)
+
+    # --- 2. Рассчитать дату поставки ---
+    delivery_date = order_date
+    days_added = 0
+    while days_added < supplier_data['delivery_days']:
+        next_day = delivery_date + timedelta(days=1)
+        # Если следующий день — каникулы, но не исключение — пропускаем
+        if next_day in holidays and next_day not in exceptions:
+            delivery_date = next_day
+            continue
+        # Иначе — засчитываем день
+        delivery_date = next_day
+        days_added += 1
+
     return (
         order_date.strftime("%d.%m.%Y"),
         delivery_date.strftime("%d.%m.%Y")
@@ -2650,6 +2784,8 @@ async def get_product_info(article: str, shop: str) -> Optional[Dict[str, Any]]:
         # Парсинг данных поставщика (используем существующую функцию)
         parsed_supplier = parse_supplier_data(supplier_data)
         order_date, delivery_date = calculate_delivery_date(parsed_supplier)
+        holidays = parsed_supplier.get('holidays', set())
+        exceptions = parsed_supplier.get('exceptions', set())
         
         # === 5. Формирование итогового результата ===
         result = {
@@ -2661,7 +2797,10 @@ async def get_product_info(article: str, shop: str) -> Optional[Dict[str, Any]]:
             'Дата заказа': order_date,
             'Дата поставки': delivery_date,
             'Номер поставщика': supplier_id,
-            'Топ в магазине': product_data.get('Топ в магазине', '0')
+            'Топ в магазине': product_data.get('Топ в магазине', '0'),
+            # --информация о каникулах ---
+            'Каникулы': list(holidays) if holidays else None,
+            'Исключения': list(exceptions) if exceptions else None,   
         }
         
         logging.info(f"Успешно получена информация: {result}")
@@ -2670,7 +2809,6 @@ async def get_product_info(article: str, shop: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         logging.exception(f"Критическая ошибка в get_product_info: {str(e)}")
         return None
-
 
 @profile_memory
 async def preload_cache() -> None:
@@ -2808,7 +2946,8 @@ async def get_supplier_data_from_db(supplier_id: str, shop: str) -> Optional[Dic
             # Определяем части SQL-запроса
             select_clause = '''
                 SELECT "Номер осн. пост.", "Название осн. пост.", "Срок доставки в магазин",
-                       "День выхода заказа", "День выхода заказа 2", "День выхода заказа 3"
+                       "День выхода заказа", "День выхода заказа 2", "День выхода заказа 3",
+                       "Каникулы список", "Исключения список"
             '''
             from_clause = f'FROM "{supplier_table_name}"'
             where_clause = 'WHERE "Номер осн. пост." = ?'
@@ -2833,7 +2972,7 @@ async def get_supplier_data_from_db(supplier_id: str, shop: str) -> Optional[Dic
     except Exception as e:
         logging.error(f"Неожиданная ошибка в get_supplier_data_from_db: {e}")
         return None
-
+        
 
 # ===================== MIDDLEWARES =====================
 @dp.update.middleware()
@@ -3290,13 +3429,25 @@ async def continue_order_process(message: types.Message, state: FSMContext):
         return
 
     response = (
-        f"Магазин: {selected_shop}\n"
+        f"🏪 Магазин: {selected_shop}\n"
         f"📦 Артикул: {product_info['Артикул']}\n"
         f"🏷️ Название: {product_info['Название']}\n"
         f"🏭 Поставщик: {product_info['Поставщик']}\n"
         f"📅 Дата заказа: {product_info['Дата заказа']}\n"
         f"🚚 Дата поставки: {product_info['Дата поставки']}\n"
     )
+
+    # --- НОВОЕ: Информация о каникулах ---
+    holidays = product_info.get('Каникулы', None)
+    exceptions = product_info.get('Исключения', None)
+
+    if holidays:
+        holiday_dates = holiday_ranges = format_holidays_ranges(holidays)
+        response += f"\n⚠️ Поставщик находится в каникулах: {holiday_dates}"
+        if exceptions:
+            exception_dates = ", ".join(d.strftime("%d.%m.%Y") for d in sorted(exceptions))
+            response += f"\n✅ Но принимает заказы: {exception_dates}"
+    # --- /НОВОЕ ---
 
     # Сохраняем информацию о товаре в state
     await state.update_data(
@@ -3305,7 +3456,9 @@ async def continue_order_process(message: types.Message, state: FSMContext):
         supplier_name=product_info['Поставщик'],
         order_date=product_info['Дата заказа'],
         delivery_date=product_info['Дата поставки'],
-        top_in_shop=product_info.get('Топ в магазине', '0')
+        top_in_shop=product_info.get('Топ в магазине', '0'),
+        holidays=product_info.get('Каникулы', []),
+        exceptions=product_info.get('Исключения', [])
     )
 
     await message.answer(response)
@@ -3482,7 +3635,7 @@ async def process_order_reason(message: types.Message, state: FSMContext):
     # Формируем сообщение подтверждения (без логики ТОП 0)
     response = (
         "🔎 Проверьте данные заказа:\n"
-        f"Магазин: {selected_shop}\n"
+        f"🏪 Магазин: {selected_shop}\n"
         f"📦 Артикул: {data['article']}\n"
         f"🏷️ Название: {data['product_name']}\n"
         f"🏭 Поставщик: {data['supplier_name']}\n" # Используем supplier_name
@@ -3491,6 +3644,17 @@ async def process_order_reason(message: types.Message, state: FSMContext):
         f"🔢 Кол-во: {data['quantity']}\n"
         f"📝 Причина: {reason}\n"
     )
+    
+    holidays = data.get('holidays', [])  
+    exceptions = data.get('exceptions', [])
+
+    if holidays:
+        holiday_dates = holiday_ranges = format_holidays_ranges(holidays)
+        response += f"\n⚠️ Поставщик находится в каникулах: {holiday_dates}"
+        if exceptions:
+            exception_dates = ", ".join(d.strftime("%d.%m.%Y") for d in sorted(exceptions))
+            response += f"\n✅ Но принимает заказы: {exception_dates}"
+
     
     await message.answer(response, reply_markup=confirm_keyboard())
     await state.set_state(OrderStates.confirmation)
@@ -3742,7 +3906,7 @@ async def process_info_request(message: types.Message, state: FSMContext):
         # Формирование ответа
         response = (
             f"🔍 Информация о товаре:\n"
-            f"Магазин: {shop}\n"
+            f"🏪 Магазин: {shop}\n"
             f"📦 Артикул: {product_info['Артикул']}\n"
             f"🏷️ Название: {product_info['Название']}\n"
             f"🔢 Отдел: {product_info['Отдел']}\n"
