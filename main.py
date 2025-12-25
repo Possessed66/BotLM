@@ -3235,7 +3235,7 @@ async def cancel_feedback(message: types.Message, state: FSMContext):
     await state.clear()
 
 
-@dp.message(Command(commands=['upload_ratings'])) # Импортируйте Command из aiogram
+@dp.message(Command(commands=['upload_ratings']))
 async def cmd_upload_ratings_start(message: types.Message):
     """Обработчик команды /upload_ratings. Запрашивает файл."""
     if message.from_user.id not in ADMINS:
@@ -3243,20 +3243,16 @@ async def cmd_upload_ratings_start(message: types.Message):
         return
 
     await message.answer("📤 Пожалуйста, отправьте CSV-файл с данными для обновления рейтингов.")
-    # Здесь можно использовать FSM, чтобы бот "знал", что ожидает файл
-    # Но для простоты пока просто ожидаем следующее сообщение с файлом
+    # FSM состояние, чтобы бот знал, что ожидает файл рейтингов
+    await state.set_state(AdminStates.waiting_for_ratings_file)
 
-
-@dp.message(F.document) # Обработчик любого документа
-async def handle_csv_document(message: types.Message):
-    """Обработчик полученного документа. Проверяет, является ли он CSV и вызывает модуль."""
-    # Проверяем, является ли отправитель администратором
+@dp.message(AdminStates.waiting_for_ratings_file, F.document)
+async def handle_ratings_csv_document(message: types.Message, state: FSMContext):
+    """Обработчик полученного документа с рейтингами."""
     if message.from_user.id not in ADMINS:
-        # await message.answer("❌ У вас нет прав для загрузки файлов.")
-        # Просто игнорируем, чтобы не спамить
+        await message.answer("❌ У вас нет прав для загрузки файлов.")
         return
 
-    # Проверяем, является ли документ CSV
     document = message.document
     file_extension = Path(document.file_name).suffix.lower()
 
@@ -3264,42 +3260,34 @@ async def handle_csv_document(message: types.Message):
          await message.answer("❌ Неверный формат файла. Ожидается файл .csv")
          return
 
-    # Скачиваем файл
-    # Создаём уникальное имя файла, чтобы избежать конфликта
     import tempfile
     import os
-    # Лучше использовать временную директорию или директорю, доступную боту
-    # и убедиться, что у бота есть права на запись/чтение/удаление
-    temp_dir = "/tmp" # Пример. Используйте директорию, доступную вашему боту.
-    # Или, например, os.path.join(os.path.dirname(__file__), 'temp_uploads')
+    temp_dir = "/tmp"
     temp_csv_path = os.path.join(temp_dir, f"temp_ratings_{message.from_user.id}_{document.file_id}.csv")
 
     try:
         file = await bot.get_file(document.file_id)
         await bot.download_file(file.file_path, temp_csv_path)
-        logging.info(f"CSV файл загружен: {temp_csv_path}")
+        logging.info(f"CSV файл рейтингов загружен: {temp_csv_path}")
 
-        # Вызываем функцию из модуля
-        await message.answer("🔄 Обрабатываю файл...")
-        # process_csv_and_update_ratings ожидает путь к файлу
-        # Запускаем в отдельном потоке, если операция тяжёлая
-        # asyncio.run не нужен внутри обработчика aiogram
+        await message.answer("🔄 Обрабатываю файл рейтингов...")
+        from rating_module import process_csv_and_update_ratings
         process_csv_and_update_ratings(temp_csv_path)
-
         await message.answer("✅ Рейтинги успешно обновлены на основе загруженного файла.")
 
     except Exception as e:
-        logging.error(f"Ошибка при обработке CSV: {e}")
+        logging.error(f"Ошибка при обработке CSV рейтингов: {e}")
         await message.answer(f"❌ Произошла ошибка при обработке файла: {str(e)}")
 
     finally:
-        # Удаляем временный файл после обработки (успешной или неудачной)
         try:
             if os.path.exists(temp_csv_path):
                 os.remove(temp_csv_path)
-                logging.info(f"Временный файл удален: {temp_csv_path}")
+                logging.info(f"Временный файл рейтингов удален: {temp_csv_path}")
         except OSError as e:
             logging.warning(f"Не удалось удалить временный файл {temp_csv_path}: {e}")
+
+    await state.clear()
 
 
 @dp.message(Command(commands=['reset_ratings']))
@@ -3344,7 +3332,6 @@ async def cmd_reset_ratings(message: types.Message):
         logging.error(f"Ошибка при удалении данных рейтингов: {e}")
         await message.answer(f"❌ Произошла ошибка при очистке базы данных: {str(e)}")
         
-
 
 # Заказ товара
 @dp.message(F.text == "🛒 Заказ под клиента")
