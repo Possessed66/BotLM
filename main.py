@@ -386,6 +386,9 @@ class FeedbackStates(StatesGroup):
     waiting_for_feedback = State()
 
 
+class AdminStates(StatesGroup):
+    waiting_for_ratings_file = State()
+
 # ===================== КЛАВИАТУРЫ =====================
 def create_keyboard(buttons: List[str], sizes: tuple, resize=True, one_time=False) -> types.ReplyKeyboardMarkup:
     """Универсальный конструктор клавиатур"""
