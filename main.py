@@ -3239,7 +3239,7 @@ async def cancel_feedback(message: types.Message, state: FSMContext):
 
 
 @dp.message(Command(commands=['upload_ratings']))
-async def cmd_upload_ratings_start(message: types.Message):
+async def cmd_upload_ratings_start(message: types.Message, state: FSMContext):
     """Обработчик команды /upload_ratings. Запрашивает файл."""
     if message.from_user.id not in ADMINS:
         await message.answer("❌ У вас нет прав для выполнения этой команды.")
