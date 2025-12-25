@@ -388,6 +388,7 @@ class FeedbackStates(StatesGroup):
 
 class AdminStates(StatesGroup):
     waiting_for_ratings_file = State()
+    waiting_for_holidays_file = State()
 
 # ===================== КЛАВИАТУРЫ =====================
 def create_keyboard(buttons: List[str], sizes: tuple, resize=True, one_time=False) -> types.ReplyKeyboardMarkup:
@@ -586,37 +587,42 @@ async def handle_queue_stats(message: types.Message):
         await message.answer("❌ Ошибка получения статистики.")
         
 
-@dp.message(Command("upload_holidays"))
-async def handle_upload_holidays_command(message: types.Message):
+dp.message(Command(commands=['upload_holidays']))
+async def cmd_upload_holidays_start(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMINS:
         await message.answer("❌ У вас нет прав для выполнения этой команды.")
         return
+    await message.answer("📁 Отправьте CSV-файл с данными о каникулах поставщиков (разделитель точка с запятой).")
+    await state.set_state(AdminStates.waiting_for_holidays_file)
 
-    await message.answer("📁 Отправьте CSV-файл с данными о каникулах поставщиков (табуляция).")
-
-# --- Обработчик получения файла ---
-@dp.message(lambda m: m.document and m.document.mime_type == 'text/csv')
-async def handle_holidays_file(message: types.Message):
-    
+@dp.message(AdminStates.waiting_for_holidays_file, F.document)
+async def handle_holidays_csv_document(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMINS:
-         await message.answer("❌ У вас нет прав для выполнения этой команды.")
-         return
+        await message.answer("❌ У вас нет прав для выполнения этой команды.")
+        return
 
     document = message.document
     file_id = document.file_id
     file_name = document.file_name
 
+    # Проверяем расширение
+    if not file_name.lower().endswith('.csv'):
+        await message.answer("❌ Файл должен быть в формате .csv")
+        return
+
     # Скачиваем файл
     file = await bot.get_file(file_id)
     file_path = file.file_path
 
-    # Создаём временный файл
+    import tempfile
+    import os
     with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as temp_file:
         await bot.download_file(file_path, temp_file.name)
         temp_csv_path = temp_file.name
 
     try:
         # Импортируем данные
+        from import_holidays import import_holidays_from_csv
         updated_count = import_holidays_from_csv(temp_csv_path)
         await message.answer(f"✅ Файл '{file_name}' успешно загружен и обработан. Обновлено {updated_count} записей в базе данных.")
     except Exception as e:
@@ -624,7 +630,12 @@ async def handle_holidays_file(message: types.Message):
         await message.answer(f"❌ Ошибка при обработке файла: {str(e)}")
     finally:
         # Удаляем временный файл
-        os.unlink(temp_csv_path)
+        try:
+            os.unlink(temp_csv_path)
+        except OSError:
+            pass  # Игнорируем ошибку, если файл уже удалён
+
+    await state.clear()
 
 
 def format_holidays_ranges(holidays):
