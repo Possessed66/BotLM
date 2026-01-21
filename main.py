@@ -1884,6 +1884,51 @@ async def show_task_details(message: types.Message, state: FSMContext):
 
 
 # =======================РАБОТА С ЗАПРОСАМИ =======================
+def convert_date_strings_in_data(data_dict):
+    """
+    Рекурсивно ищет и преобразует строки дат в формате 'YYYY-MM-DD' обратно в datetime.date.
+    """
+    if not isinstance(data_dict, dict):
+        return data_dict
+
+    converted = {}
+    for key, value in data_dict.items():
+        if key in ('holidays', 'exceptions') and isinstance(value, list):
+            # Предполагаем, что это список дат в формате 'YYYY-MM-DD'
+            new_list = []
+            for item in value:
+                if isinstance(item, str):
+                    try:
+                        # Парсим строку как 'YYYY-MM-DD'
+                        parsed_date = datetime.strptime(item, "%Y-%m-%d").date()
+                        new_list.append(parsed_date)
+                    except ValueError:
+                        # Если не удалось, оставляем как есть
+                        new_list.append(item)
+                        logging.warning(f"⚠️ Не удалось распарсить строку даты: {item}")
+                else:
+                    # Если уже date, оставляем как есть
+                    new_list.append(item)
+            converted[key] = new_list
+        elif isinstance(value, dict):
+            # Рекурсивно обрабатываем вложенные словари
+            converted[key] = convert_date_strings_in_data(value)
+        elif isinstance(value, list):
+            # Обрабатываем списки (но не holidays/exceptions, они уже обработаны выше)
+            new_list = []
+            for item in value:
+                if isinstance(item, dict):
+                    new_list.append(convert_date_strings_in_data(item))
+                else:
+                    new_list.append(item)
+            converted[key] = new_list
+        else:
+            # Остальные значения без изменений
+            converted[key] = value
+    return converted
+
+
+
 
 def initialize_approval_requests_table():
     """Создает таблицу для хранения запросов на одобрение заказа ТОП 0."""
@@ -2347,8 +2392,11 @@ async def handle_continue_order(callback: types.CallbackQuery, state: FSMContext
 
     # --- Восстановление данных FSM ---
     user_data_snapshot = request_data['user_data']
+    
     try:
-        await state.set_data(user_data_snapshot)
+        converted_data = convert_date_strings_in_data(user_data_snapshot)
+        await state.set_data(converted_data)
+        
         logging.info(f"✅ Данные FSM для пользователя {user_id} восстановлены из запроса {request_id}")
         
         article = user_data_snapshot.get('article', 'N/A')
