@@ -17,7 +17,7 @@ import sqlite3
 import gspread.utils
 import uuid
 import tempfile
-from contextlib import contextmanager
+from contextlib import contextmanager, closing, suppress
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.utils.markdown import markdown_decoration
 from typing import Dict, Any, List, Optional, Tuple
@@ -28,10 +28,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.enums import ParseMode
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
-from aiogram.types import ReplyKeyboardRemove, File, BufferedInputFile, InlineKeyboardMarkup
+from aiogram.types import ReplyKeyboardRemove, File, BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramForbiddenError
 from aiogram.filters import Command
-from contextlib import suppress
 from google.oauth2.service_account import Credentials
 import gspread
 from gspread.exceptions import APIError, SpreadsheetNotFound
@@ -270,6 +269,7 @@ logging.basicConfig(
 SERVICE_MODE = True
 ADMINS = [122086799, 5183727015]
 worker_running = True
+reminder_running = True
 
 # Кэширование
 CACHE_TTL = 43200  # 12 часов
@@ -2015,58 +2015,12 @@ async def cancel_expo(message: types.Message, state: FSMContext):
 
 
 # =======================РАБОТА С ЗАПРОСАМИ =======================
-def convert_date_strings_in_data(data_dict):
-    """
-    Рекурсивно ищет и преобразует строки дат в формате 'YYYY-MM-DD' обратно в datetime.date.
-    """
-    if not isinstance(data_dict, dict):
-        return data_dict
-
-    converted = {}
-    for key, value in data_dict.items():
-        if key in ('holidays', 'exceptions') and isinstance(value, list):
-            # Предполагаем, что это список дат в формате 'YYYY-MM-DD'
-            new_list = []
-            for item in value:
-                if isinstance(item, str):
-                    try:
-                        # Парсим строку как 'YYYY-MM-DD'
-                        parsed_date = datetime.strptime(item, "%Y-%m-%d").date()
-                        new_list.append(parsed_date)
-                    except ValueError:
-                        # Если не удалось, оставляем как есть
-                        new_list.append(item)
-                        logging.warning(f"⚠️ Не удалось распарсить строку даты: {item}")
-                else:
-                    # Если уже date, оставляем как есть
-                    new_list.append(item)
-            converted[key] = new_list
-        elif isinstance(value, dict):
-            # Рекурсивно обрабатываем вложенные словари
-            converted[key] = convert_date_strings_in_data(value)
-        elif isinstance(value, list):
-            # Обрабатываем списки (но не holidays/exceptions, они уже обработаны выше)
-            new_list = []
-            for item in value:
-                if isinstance(item, dict):
-                    new_list.append(convert_date_strings_in_data(item))
-                else:
-                    new_list.append(item)
-            converted[key] = new_list
-        else:
-            # Остальные значения без изменений
-            converted[key] = value
-    return converted
-
-
-
-
 def initialize_approval_requests_table():
     """Создает таблицу для хранения запросов на одобрение заказа ТОП 0."""
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            
+
             # 1. Создание таблицы (без изменений, IF NOT EXISTS предотвратит ошибку, если таблица уже есть)
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS approval_requests (
@@ -2086,24 +2040,24 @@ def initialize_approval_requests_table():
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
-            
+
             # 2. Проверка и добавление столбца reject_comment, если его нет
             # Получаем информацию о столбцах таблицы
             cursor.execute("PRAGMA table_info(approval_requests)")
             columns = [info[1] for info in cursor.fetchall()] # info[1] - это имя столбца
-            
+
             if 'reject_comment' not in columns:
                 logging.info("Добавление столбца 'reject_comment' в таблицу 'approval_requests'...")
                 cursor.execute("ALTER TABLE approval_requests ADD COLUMN reject_comment TEXT")
                 logging.info("Столбец 'reject_comment' успешно добавлен.")
             else:
                 logging.debug("Столбец 'reject_comment' уже существует в таблице 'approval_requests'.")
-            
+
             # 3. Создание индекса (без изменений)
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_user_status ON approval_requests(user_id, status)
             ''')
-            
+
             conn.commit()
             logging.info("✅ Таблица approval_requests проверена/инициализирована")
     except Exception as e:
@@ -2217,32 +2171,32 @@ async def update_approval_request_status(
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            
+
             # Формируем SQL-запрос динамически в зависимости от переданных параметров
             # Это базовый пример. В production лучше использовать более безопасные методы,
             # например, отдельные подготовленные выражения для каждой комбинации параметров.
-            
+
             # Определяем, какие параметры переданы, чтобы построить корректный SQL
-            
+
             set_parts = ["status = ?", "updated_at = CURRENT_TIMESTAMP"]
             params = [status] # status всегда передается
-            
+
             if manager_message_id is not None:
                 set_parts.append("manager_message_id = ?")
                 params.append(manager_message_id)
-                
+
             if reject_comment is not None:
                 set_parts.append("reject_comment = ?")
                 params.append(reject_comment)
-                
+
             # Добавляем request_id в конец списка параметров для WHERE
             params.append(request_id)
-            
+
             sql = f"UPDATE approval_requests SET {', '.join(set_parts)} WHERE request_id = ?"
-            
+
             cursor.execute(sql, params)
             conn.commit()
-            
+
             if cursor.rowcount > 0:
                 logging.info(f"✅ Статус запроса {request_id} обновлен на '{status}'")
                 # Если был передан комментарий при отказе, логируем его
@@ -2349,7 +2303,7 @@ async def handle_manager_approval(callback: types.CallbackQuery, state: FSMConte
             try:
                 await bot.send_message(chat_id=user_id, text=user_message, reply_markup=user_kb, parse_mode='HTML')
                 await callback.answer("✅ Заказ одобрен. Пользователь уведомлен.", show_alert=True)
-                
+
                 # --- Обновление сообщения менеджера ---
                 try:
                 # ИСПОЛЬЗУЕМ callback.message.text ВМЕСТО callback.message.text_markdown_v2
@@ -2360,7 +2314,7 @@ async def handle_manager_approval(callback: types.CallbackQuery, state: FSMConte
                     )
                 except Exception as e:
                     logging.warning(f"Не удалось отредактировать сообщение менеджера (одобрение): {e}")
-                    
+
             except Exception as e:
                 logging.error(f"❌ Не удалось отправить уведомление пользователю {user_id}: {e}")
                 await callback.answer("✅ Заказ одобрен, но не удалось уведомить пользователя.", show_alert=True)
@@ -2383,15 +2337,15 @@ async def handle_manager_approval(callback: types.CallbackQuery, state: FSMConte
             # Можно использовать user_id менеджера как ключ, но проще использовать FSMContext напрямую
             # Для простоты, сохраним в данных состояния текущего менеджера
             await state.update_data(current_reject_request_id=request_id)
-            
+
             await callback.answer("Введите причину отказа в следующем сообщении.", show_alert=True)
         except Exception as e:
             logging.error(f"❌ Ошибка при запросе комментария от менеджера {manager_id}: {e}")
             await callback.answer("❌ Ошибка. Не удалось запросить комментарий.", show_alert=True)
-                    
+
         else:
             await callback.answer("❌ Ошибка при обновлении статуса запроса.", show_alert=True)
-                    
+
 
 
 @dp.message(ManagerApprovalStates.awaiting_reject_comment)
@@ -2399,7 +2353,7 @@ async def handle_manager_reject_comment(message: types.Message, state: FSMContex
     """Обработка текстового комментария менеджера при отказе."""
     manager_id = message.from_user.id
     reject_comment = message.text.strip()
-    
+
     if not reject_comment:
         await message.answer("📝 Комментарий не может быть пустым. Пожалуйста, введите причину отказа:")
         return
@@ -2407,7 +2361,7 @@ async def handle_manager_reject_comment(message: types.Message, state: FSMContex
     # Получаем request_id из состояния менеджера
     manager_state_data = await state.get_data()
     request_id = manager_state_data.get('current_reject_request_id')
-    
+
     if not request_id:
         await message.answer("❌ Ошибка состояния. Пожалуйста, начните процесс заново.")
         await state.clear() # Очищаем состояние менеджера
@@ -2444,7 +2398,7 @@ async def handle_manager_reject_comment(message: types.Message, state: FSMContex
         shop = request_data['shop']
         product_name = request_data.get('product_name', 'Неизвестно') # На всякий случай
         rejecting_manager_id = request_data['manager_id']
-        
+
         department_from_request = request_data.get('department', 'Неизвестный отдел')
         rejecting_manager_info = get_manager_id_by_department(department_from_request)
 
@@ -2470,13 +2424,13 @@ async def handle_manager_reject_comment(message: types.Message, state: FSMContex
                 reply_markup=main_menu_keyboard(user_id), # Или другая клавиатура для пользователя
                 parse_mode='HTML'
             )
-            
+
             # Подтверждение менеджеру
             await message.answer(
                 "✅ Отказ оформлен. Пользователь уведомлен с комментарием.",
                 reply_markup=main_menu_keyboard(message.from_user.id) # Или основная клавиатура менеджера
             )
-            
+
         except Exception as e:
             logging.error(f"❌ Не удалось отправить уведомление об отказе пользователю {user_id}: {e}")
             await message.answer(
@@ -2489,7 +2443,7 @@ async def handle_manager_reject_comment(message: types.Message, state: FSMContex
             "❌ Ошибка при оформлении отказа в базе данных.",
             reply_markup=main_menu_keyboard(message.from_user.id)
         )
-    
+
     # В любом случае (успех или ошибка) очищаем состояние менеджера
     await state.clear()
 
@@ -2523,18 +2477,15 @@ async def handle_continue_order(callback: types.CallbackQuery, state: FSMContext
 
     # --- Восстановление данных FSM ---
     user_data_snapshot = request_data['user_data']
-    
     try:
-        converted_data = convert_date_strings_in_data(user_data_snapshot)
-        await state.set_data(converted_data)
-        
+        await state.set_data(user_data_snapshot)
         logging.info(f"✅ Данные FSM для пользователя {user_id} восстановлены из запроса {request_id}")
-        
+
         article = user_data_snapshot.get('article', 'N/A')
         product_name = user_data_snapshot.get('product_name', 'N/A')
         department = user_data_snapshot.get('department', 'N/A')
         quantity = user_data_snapshot.get('quantity', 'N/A')
-        
+
         # --- Удаление записи из БД ---
         await delete_approval_request(request_id)
 
@@ -2550,7 +2501,7 @@ async def handle_continue_order(callback: types.CallbackQuery, state: FSMContext
             )
         # --- Отправка уведомления пользователю ---
         await callback.answer("✅ Данные восстановлены. Продолжаем заказ...", show_alert=True)
-        
+
         # --- Продолжение процесса заказа ---
         # После восстановления данных, переходим к вводу причины заказа
         # Удаляем предыдущее сообщение с кнопкой (опционально)
@@ -2558,15 +2509,116 @@ async def handle_continue_order(callback: types.CallbackQuery, state: FSMContext
             await callback.message.delete()
         except Exception:
             pass
-            
+
         await callback.message.answer(resume_message, parse_mode='HTML', reply_markup=cancel_keyboard())
         await state.set_state(OrderStates.order_reason_input)
-        
+
     except Exception as e:
         logging.error(f"❌ Ошибка восстановления данных FSM для пользователя {user_id} из запроса {request_id}: {e}")
         await callback.answer("❌ Ошибка восстановления данных. Обратитесь к администратору.", show_alert=True)
         await delete_approval_request(request_id)
         await state.clear()
+
+
+
+async def check_and_remind_overdue_approvals(bot_instance: Bot):
+    """
+    Проверяет, есть ли непросроченные запросы на одобрение ТОП 0 старше 2 дней,
+    и отправляет напоминания менеджерам.
+    Теперь включает список ID всех просроченных запросов для удобства поиска.
+    """
+    logging.info("🔍 Начало проверки просроченных запросов на одобрение ТОП 0...")
+    try:
+        # Вычисляем дату, раньше которой считаем запросы просроченными
+        cutoff_time = datetime.now() - timedelta(days=2)
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            # Выбираем request_id, manager_id и другие поля, если понадобятся
+            # Фильтруем по статусу и дате создания
+            # Сортировка по manager_id позволяет группировать в цикле
+            cursor.execute("""
+                SELECT request_id, manager_id, user_id, article, created_at
+                FROM approval_requests
+                WHERE status = 'pending' AND created_at < ?
+                ORDER BY manager_id, created_at
+            """, (cutoff_time.isoformat(),))
+            overdue_requests = cursor.fetchall()
+
+        if not overdue_requests:
+            logging.info("📭 Нет просроченных запросов на одобрение.")
+            return
+
+        # Группируем запросы по manager_id
+        manager_requests = {}
+        for req in overdue_requests:
+            # req - это sqlite3.Row, можно обращаться по имени столбца
+            manager_id = req['manager_id']
+            if manager_id not in manager_requests:
+                manager_requests[manager_id] = []
+            # Добавляем всю информацию о запросе, если понадобится в сообщении
+            manager_requests[manager_id].append({
+                'request_id': req['request_id'],
+                'user_id': req['user_id'],
+                'article': req['article'],
+                'created_at': req['created_at'],
+            })
+
+        notified_count = 0
+        for manager_id, requests in manager_requests.items():
+            try:
+                # Формируем сообщение
+                count = len(requests)
+                
+                # --- Формируем список ID запросов ---
+                # Соединяем ID в одну строку, разделённую запятыми
+                # Это делает их легко копируемыми и идентифицируемыми в чате
+                request_id_list = ', '.join([req['request_id'] for req in requests])
+
+                # Новый вариант: список всех ID
+                reminder_text = (
+                    f"⏰ <b>Напоминание о запросах на одобрение ТОП 0</b>\n\n"
+                    f"У вас <b>{count}</b> непросроченных запросов старше 2 дней.\n\n"
+                    f"<b>Список ID запросов:</b>\n<code>{request_id_list}</code>\n\n"
+                    f"Пожалуйста, проверьте и обработайте их в боте."
+                    
+                )
+
+                # Отправляем сообщение менеджеру
+                await bot_instance.send_message(chat_id=manager_id, text=reminder_text, parse_mode='HTML')
+                notified_count += 1
+                logging.info(f"🔔 Напоминание отправлено менеджеру {manager_id} о {count} запросах (IDs: {request_id_list}).")
+                # Делаем небольшую паузу, чтобы не спамить Telegram API
+                await asyncio.sleep(0.1)
+            except Exception as e:
+                logging.error(f"❌ Не удалось отправить напоминание менеджеру {manager_id}: {e}")
+                # Здесь можно добавить логику повторной отправки или уведомления админов
+
+        logging.info(f"✅ Отправлено {notified_count} напоминаний менеджерам о просроченных запросах.")
+
+    except Exception as e:
+        logging.error(f"❌ Ошибка в задаче check_and_remind_overdue_approvals: {e}")
+
+
+
+async def run_reminder_task(bot_instance: Bot):
+    """Циклический запуск задачи проверки просроченных запросов."""
+    global reminder_running
+    logging.info("🚀 Запущена задача напоминаний о просроченных запросах ТОП 0.")
+    while reminder_running:
+        try:
+            # Запускаем проверку
+            await check_and_remind_overdue_approvals(bot_instance)
+            # Ждем 24 часа перед следующей проверкой
+            logging.info("⏰ Задача напоминаний ожидает 24 часа...")
+            await asyncio.sleep(86400) # 86400 секунд = 24 часа
+        except asyncio.CancelledError:
+            logging.info("🛑 Задача напоминаний о просроченных запросах отменена.")
+            break
+        except Exception as e:
+            logging.error(f"🔥 Критическая ошибка в задаче напоминаний: {e}", exc_info=True)
+            # Ждем перед перезапуском цикла, чтобы не уйти в бесконечный крэш
+            await asyncio.sleep(300) # 5 минут
 
 
 # =============================ОЧЕРЕДЬ ЗАКАЗОВ=================================
@@ -4490,6 +4542,7 @@ async def startup():
         asyncio.create_task(scheduled_cache_update())
         asyncio.create_task(state_cleanup_task())
         asyncio.create_task(check_deadlines())
+        asyncio.create_task(run_reminder_task(bot))
         worker_task = asyncio.create_task(process_order_queue(bot))
         logging.info("✅ Фоновый обработчик очереди заказов запущен.")
         logging.info("✅ Кэш загружен, задачи запущены")
