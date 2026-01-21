@@ -390,6 +390,13 @@ class AdminStates(StatesGroup):
     waiting_for_ratings_file = State()
     waiting_for_holidays_file = State()
 
+
+class ExpoStates(StatesGroup):
+    article_input = State()
+    action_selection = State()
+    quantity_input = State()  # Только для "Поставить на Экспо"
+    confirmation = State()
+
 # ===================== КЛАВИАТУРЫ =====================
 def create_keyboard(buttons: List[str], sizes: tuple, resize=True, one_time=False) -> types.ReplyKeyboardMarkup:
     """Универсальный конструктор клавиатур"""
@@ -404,10 +411,10 @@ def create_keyboard(buttons: List[str], sizes: tuple, resize=True, one_time=Fals
 
 def main_menu_keyboard(user_id: int = None) -> types.ReplyKeyboardMarkup:
     """Главное меню с учетом прав"""
-    buttons = ["📋 Запрос информации", "🛒 Заказ под клиента", "📞 Обратная связь",]
+    buttons = ["📋 Запрос информации", "🛒 Заказ под клиента", "🖼️ Экспо", "📞 Обратная связь",]
     if user_id and user_id in ADMINS:
         buttons.append("🛠 Админ-панель")
-    return create_keyboard(buttons, (2, 1, 1))
+    return create_keyboard(buttons, (2, 2, 1))
 
 def article_input_keyboard() -> types.ReplyKeyboardMarkup:
     return create_keyboard(
@@ -1881,6 +1888,130 @@ async def show_task_details(message: types.Message, state: FSMContext):
     await message.answer(response, parse_mode=ParseMode.MARKDOWN, reply_markup=tasks_admin_keyboard())
     await state.clear()
 
+# =======================РАБОТА С ЭКСПО =======================
+@dp.message(F.text == "🖼️ Экспо")
+async def handle_expo_start(message: types.Message, state: FSMContext):
+    """Начало работы с Экспо"""
+    user_data = await get_user_data(str(message.from_user.id))
+    if not user_data:
+        await message.answer("❌ Сначала пройдите регистрацию через /start")
+        return
+    await state.update_data(
+        shop=user_data['shop'],
+        user_name=user_data['name'],
+        user_position=user_data['position']
+    )
+    await message.answer("🔢 Введите артикул товара:", reply_markup=cancel_keyboard())
+    await state.set_state(ExpoStates.article_input)
+
+
+@dp.message(ExpoStates.article_input)
+async def process_expo_article(message: types.Message, state: FSMContext):
+    article = message.text.strip()
+    if not re.match(r'^\d{4,10}$', article):
+        await message.answer("❌ Артикул должен состоять из 4–10 цифр.")
+        return
+
+    data = await state.get_data()
+    shop = data['shop']
+    product_info = await get_product_info(article, shop)
+
+    if not product_info:
+        await message.answer("❌ Товар не найден.", reply_markup=main_menu_keyboard(message.from_user.id))
+        await state.clear()
+        return
+
+    # Сохраняем данные
+    await state.update_data(
+        article=article,
+        product_name=product_info['Название'],
+        department=product_info['Отдел'],
+        supplier_name=product_info['Поставщик']
+    )
+
+    # Показываем краткую информацию
+    response = (
+        f"📦 Артикул: {article}\n"
+        f"🏷️ Название: {product_info['Название']}\n"
+        f"🏭 Поставщик: {product_info['Поставщик']}\n\n"
+        "Выберите действие:"
+    )
+    kb = ReplyKeyboardBuilder()
+    kb.button(text="➕ Поставить на Экспо")
+    kb.button(text="➖ Снять с Экспо")
+    kb.button(text="❌ Отмена")
+    kb.adjust(2, 1)
+    await message.answer(response, reply_markup=kb.as_markup(resize_keyboard=True))
+    await state.set_state(ExpoStates.action_selection)
+
+
+@dp.message(ExpoStates.action_selection, F.text.in_(["➕ Поставить на Экспо", "➖ Снять с Экспо"]))
+async def handle_expo_action(message: types.Message, state: FSMContext):
+    action = message.text
+    await state.update_data(action=action)
+
+    if action == "➕ Поставить на Экспо":
+        await message.answer("🔢 Укажите количество штук:", reply_markup=cancel_keyboard())
+        await state.set_state(ExpoStates.quantity_input)
+    else:  # "➖ Снять с Экспо"
+        await message.answer("✅ Подтвердите снятие с Экспо:", reply_markup=confirm_keyboard())
+        await state.set_state(ExpoStates.confirmation)
+
+
+@dp.message(ExpoStates.quantity_input)
+async def process_expo_quantity(message: types.Message, state: FSMContext):
+    try:
+        quantity = int(message.text)
+        if quantity <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("❌ Введите корректное положительное число.")
+        return
+
+    await state.update_data(quantity=quantity)
+    await message.answer("✅ Подтвердите действие:", reply_markup=confirm_keyboard())
+    await state.set_state(ExpoStates.confirmation)
+
+
+@dp.message(ExpoStates.confirmation, F.text == "✅ Подтвердить")
+async def confirm_expo_action(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+
+    action = data['action']
+    order_reason = "Поставить на Экспо" if action == "➕ Поставить на Экспо" else "Снять с Экспо"
+    quantity = data.get('quantity', 1)  # Для "Снять" — по умолчанию 1 (не используется, но нужно для совместимости)
+
+    # Формируем данные заказа в том же формате, что и обычный заказ
+    order_data = {
+        'selected_shop': data['shop'],
+        'article': data['article'],
+        'order_reason': order_reason,
+        'quantity': quantity,
+        'department': data['department'],
+        'user_name': data['user_name'],
+        'user_position': data['user_position'],
+        'product_name': data['product_name'],
+        'supplier_name': data['supplier_name'],
+    }
+
+    # Добавляем в очередь
+    success = await add_order_to_queue(message.from_user.id, order_data)
+    if success:
+        await message.answer("✅ Действие отправлено в обработку!", reply_markup=main_menu_keyboard(message.from_user.id))
+    else:
+        await message.answer("❌ Ошибка при постановке в очередь. Обратитесь к администратору.", reply_markup=main_menu_keyboard(message.from_user.id))
+
+    await state.clear()
+
+
+
+@dp.message(ExpoStates.article_input, F.text == "❌ Отмена")
+@dp.message(ExpoStates.action_selection, F.text == "❌ Отмена")
+@dp.message(ExpoStates.quantity_input, F.text == "❌ Отмена")
+@dp.message(ExpoStates.confirmation, F.text == "❌ Отмена")
+async def cancel_expo(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("❌ Операция отменена.", reply_markup=main_menu_keyboard(message.from_user.id))
 
 
 # =======================РАБОТА С ЗАПРОСАМИ =======================
