@@ -3826,19 +3826,39 @@ async def handle_client_order(message: types.Message, state: FSMContext):
 
 @dp.message(OrderStates.article_input)
 async def process_article_input(message: types.Message, state: FSMContext):
-    """Обработка введенного артикула"""
+    """Обработка введенного артикула (одного или списка)"""
     if message.photo:
         await message.answer("📸 Распознавание штрих-кодов отключено. Введите артикул вручную.")
         return
-    article = message.text.strip()
-    
-    if not re.match(r'^\d{4,10}$', article):
-        await message.answer("❌ Неверный формат артикула. Артикул должен состоять из 4-10 цифр.")
+
+    raw_input = message.text.strip()
+
+    # Парсим ввод на список артикулов
+    parts = re.split(r'[,\n\r]+', raw_input)
+    articles = []
+    for part in parts:
+        cleaned = re.sub(r'\D', '', part.strip())
+        if len(cleaned) >= 4 and len(cleaned) <= 10:
+            articles.append(cleaned)
+
+    if not articles:
+        await message.answer("❌ Неверный формат артикула(ов). Артикул должен состоять из 4-10 цифр.")
         return
-        
-    await state.update_data(article=article)
-    await message.answer("📌 Выберите магазин для заказа:", reply_markup=quick_shop_selection_keyboard())
-    await state.set_state(OrderStates.shop_selection)
+
+    if len(articles) == 1:
+        # --- СТАРАЯ ЛОГИКА ---
+        article = articles[0]
+        await state.update_data(article=article)
+        await message.answer("📌 Выберите магазин для заказа:", reply_markup=quick_shop_selection_keyboard())
+        await state.set_state(OrderStates.shop_selection)
+
+    else:
+        # --- НОВАЯ ЛОГИКА ---
+        # Сохраняем список артикулов в state
+        await state.update_data(art_list=articles)
+        await message.answer(f"🔍 Найдено {len(articles)} артикулов. Введите количество для каждого (в том же порядке, через запятую или с новой строки).")
+        # Переходим к вводу количеств
+        await state.set_state(OrderStates.waiting_for_quantities_list)
 
 
 @dp.message(OrderStates.shop_selection)
