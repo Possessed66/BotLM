@@ -652,32 +652,49 @@ async def handle_holidays_csv_document(message: types.Message, state: FSMContext
 
 def format_holidays_ranges(holidays):
     """
-    Принимает список дат (datetime.date), возвращает строку вида:
-    "19.12.2025 - 25.12.2025, 27.12.2025, 30.12.2025 - 07.01.2026"
+    Принимает список дат (datetime.date или строки вида 'YYYY-MM-DD'),
+    возвращает строку вида: "19.12.2025 - 25.12.2025, 27.12.2025"
     """
     if not holidays:
         return "нет"
 
-    sorted_dates = sorted(holidays)
+    # Нормализуем все элементы в datetime.date
+    normalized_dates = []
+    for d in holidays:
+        if isinstance(d, str):
+            try:
+                # Поддерживаем формат 'YYYY-MM-DD'
+                parsed = datetime.strptime(d, "%Y-%m-%d").date()
+                normalized_dates.append(parsed)
+            except ValueError:
+                logging.warning(f"⚠️ Неверный формат даты в каникулах: {d}")
+                continue
+        elif isinstance(d, date):
+            normalized_dates.append(d)
+        else:
+            logging.warning(f"⚠️ Неизвестный тип даты в каникулах: {type(d)}")
+            continue
+
+    if not normalized_dates:
+        return "нет"
+
+    sorted_dates = sorted(set(normalized_dates))
     ranges = []
     start = sorted_dates[0]
     end = sorted_dates[0]
 
     for d in sorted_dates[1:]:
         if d == end + timedelta(days=1):
-            # Продолжаем диапазон
             end = d
         else:
-            # Заканчиваем предыдущий диапазон
             if start == end:
                 ranges.append(start.strftime("%d.%m.%Y"))
             else:
                 ranges.append(f"{start.strftime('%d.%m.%Y')} - {end.strftime('%d.%m.%Y')}")
-            # Начинаем новый
             start = d
             end = d
 
-    # Не забываем последний
+    # Последний диапазон
     if start == end:
         ranges.append(start.strftime("%d.%m.%Y"))
     else:
